@@ -1,0 +1,291 @@
+import AppKit
+import BacktrackCore
+import SwiftUI
+
+@MainActor final class Store: ObservableObject {
+    @Published var sessions: [Session] = []
+    @Published var hits: [SearchHit] = []
+    @Published var query = "" { didSet { if query != oldValue { search() } } }
+    @Published var provider = "all" { didSet { if provider != oldValue { search() } } }
+    @Published var related = true { didSet { if related != oldValue { search() } } }
+    @Published var recentFirst = true { didSet { if recentFirst != oldValue { search() } } }
+    @Published var selected: String?
+    @Published var refreshing = false
+    @Published var opening = false
+    @Published var searching = false
+    @Published var error: String?
+    @Published var notice = ""
+    @Published var indexedAt: Date?
+    @Published var searchMS = 0.0
+    @Published var coverage = IndexCoverage()
+    @Published var semanticIndexing = false
+    @Published var semanticSearching = false
+    @Published var semanticNotice = ""
+    private let semanticEngine = SemanticSearch()
+    private var semanticTask: Task<Void, Never>?
+    private var lexicalTask: Task<([SearchHit], String?), Never>?
+    private var snippetTask: Task<Void, Never>?
+    private var snippetWorker: Task<[String: (String, String)], Never>?
+    private var pendingSnippets = Set<String>()
+    private var requestedSnippets = Set<String>()
+    private var preview = false
+    private var snapshotFrozen = false
+    private var engine = SearchEngine([])
+    private var generation = 0
+    private var searchTask: Task<Void, Never>?
+    private let cache = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Backtrack/sessions.json")
+    var currentHit: SearchHit? { hits.first { $0.id == selected } }
+    var current: Session? { hits.first { $0.id == selected }?.session }
+    var visible: [SearchHit] { Array(hits.prefix(100)) }
+
+    init(preview: Bool = false, refreshOnStart: Bool = true) {
+        self.preview = preview
+        if preview {
+            let now = Date().timeIntervalSince1970
+            sessions = [
+                Session(id: "1", cwd: "/Users/demo/Projects/Backtrack", title: "A library for past conversations", branch: "main", first: "Build a small Mac app to find and resume saved coding conversations.", latest: "Let’s call it Backtrack. Search the actual conversation, not just its title, and show the matching passage.", searchText: "Backtrack local conversation search", updated: now - 86400),
+                Session(id: "2", provider: "claude", cwd: "/Users/demo/Projects/ExampleApp", title: "Fix notification delivery", branch: "fix/push-registration", latest: "Check the registration path when the app returns to the foreground.", updated: now - 4200),
+                Session(id: "3", cwd: "/Users/demo/Projects/PersonalSite", title: "Turn blog snippets into tweets", latest: "Keep the code examples intact.", updated: now - 7000),
+                Session(id: "4", cwd: "/Users/demo/Projects/ExampleApp", title: "Audit feature flags", updated: now - 12000),
+                Session(id: "5", provider: "claude", cwd: "/Users/demo/Projects/ExampleApp", title: "Make clean builds faster", updated: now - 86400),
+                Session(id: "6", cwd: "/Users/demo/Projects/FreeParking", title: "Restore saved terminal titles", updated: now - 120000)
+            ]
+            engine = SearchEngine(sessions)
+            hits = engine.search("")
+            selected = hits.first?.id
+            indexedAt = Date()
+            return
+        }
+        guard refreshOnStart else { return }
+        if let flag = CommandLine.arguments.firstIndex(of: "--search"), flag + 1 < CommandLine.arguments.count {
+            query = CommandLine.arguments[flag + 1]
+        }
+        Task {
+            await loadCache()
+            await refresh()
+        }
+    }
+    func snapshot(_ sessions: [Session], query: String) {
+        self.sessions = sessions
+        engine = SearchEngine(sessions)
+        self.query = query
+        snapshotFrozen = true
+        searchTask?.cancel()
+        searching = false
+        hits = (try? LocalSearch.search(query, sessions: sessions)) ?? []
+        selected = hits.first(where: { $0.session.title.contains("Free Parking UI") })?.id ?? hits.first?.id
+    }
+    func loadCache() async {
+        let url = cache
+        let result = await Task.detached(priority: .userInitiated) { () -> SessionIndex? in
+            guard let data = try? Data(contentsOf: url), let index = try? JSONDecoder().decode(SessionIndex.self, from: data), index.version == 1 else { return nil }
+            return index
+        }.value
+        if let index = result {
+            sessions = index.sessions
+            indexedAt = Date(timeIntervalSince1970: index.indexedAt)
+            notice = index.warnings.joined(separator: "\n")
+            search()
+        }
+    }
+    func search() {
+        guard !snapshotFrozen else { return }
+        searching = true
+        semanticSearching = false
+        generation += 1
+        let version = generation
+        let engine = engine, sessions = sessions, query = query, provider = provider, related = related, recent = recentFirst, preview = preview
+        searchTask?.cancel()
+        lexicalTask?.cancel()
+        snippetTask?.cancel(); snippetWorker?.cancel(); snippetTask = nil
+        pendingSnippets.removeAll(); requestedSnippets.removeAll()
+        searchTask = Task {
+            do { try await Task.sleep(for: .milliseconds(35)) } catch { return }
+            guard !Task.isCancelled else { return }
+            let start = CFAbsoluteTimeGetCurrent()
+            let worker = Task.detached(priority: .userInitiated) { () -> ([SearchHit], String?) in
+                if preview {
+                    var hits = engine.search(query, provider: provider, related: false, recentFirst: recent)
+                    for i in hits.indices {
+                        hits[i].snippet = hits[i].session.latest.replacingOccurrences(of: "Backtrack", with: "⟦Backtrack⟧")
+                        hits[i].matchSource = "Assistant reply"
+                    }
+                    return (hits, nil)
+                }
+                do {
+                    return (try LocalSearch.search(query, sessions: sessions, provider: provider, recentFirst: recent), nil)
+                } catch is CancellationError {
+                    return ([], nil)
+                } catch {
+                    return (SearchEngine(sessions).search(query, provider: provider, related: false, recentFirst: recent), "Transcript index is not ready. Showing session details for now.")
+                }
+            }
+            lexicalTask = worker
+            let result = await worker.value
+            guard version == generation, !Task.isCancelled else { return }
+            searching = false
+            hits = result.0
+            searchMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
+            if let warning = result.1 { notice = warning }
+            else if notice.hasPrefix("Transcript index is not ready") { notice = "" }
+            if !visible.contains(where: { $0.id == selected }) { selected = hits.first?.id }
+            guard related, !preview, hits.count < 20, SearchEngine.tokens(query).count >= 2 else { return }
+            do {
+                // Let typing settle before asking the model. Keyword results are already visible.
+                try await Task.sleep(for: .milliseconds(140))
+                guard version == generation, !Task.isCancelled else { return }
+                semanticSearching = true
+                let semantic = try await semanticEngine.search(query, sessions: sessions, provider: provider, recentFirst: recent)
+                guard version == generation, !Task.isCancelled else { return }
+                semanticNotice = ""
+                // Exact/prefix results retain their excerpts. Meaning-only hits are labelled.
+                let exactIDs = Set(hits.map(\.id))
+                hits = LocalSearch.sort(hits + semantic.filter { !exactIDs.contains($0.id) })
+                if selected == nil { selected = hits.first?.id }
+            } catch is CancellationError { return }
+            catch { semanticNotice = "Semantic search unavailable; full-text results are still shown." }
+            guard version == generation else { return }
+            semanticSearching = false
+        }
+    }
+    func ensureSnippet(for id: String) {
+        guard !searching, !query.isEmpty, !snapshotFrozen,
+              let index = hits.firstIndex(where: { $0.id == id }), hits[index].snippet.isEmpty else { return }
+        for hit in hits[index..<min(hits.count, index + 12)] where !hit.semantic && hit.snippet.isEmpty {
+            if requestedSnippets.insert(hit.id).inserted { pendingSnippets.insert(hit.id) }
+        }
+        guard snippetTask == nil, !pendingSnippets.isEmpty else { return }
+        let version = generation, query = query
+        snippetTask = Task {
+            defer { if generation == version { snippetTask = nil } }
+            do { try await Task.sleep(for: .milliseconds(30)) } catch { return }
+            while generation == version && !pendingSnippets.isEmpty && !Task.isCancelled {
+                let ids = pendingSnippets; pendingSnippets.removeAll()
+                let sessions = hits.filter { ids.contains($0.id) }.map(\.session)
+                let worker = Task.detached(priority: .userInitiated) {
+                    (try? LocalSearch.snippets(query, sessions: sessions)) ?? [:]
+                }
+                snippetWorker = worker
+                let values = await worker.value
+                guard generation == version, !Task.isCancelled else { return }
+                for i in hits.indices {
+                    if let value = values[hits[i].id], !hits[i].semantic {
+                        hits[i].snippet = value.0
+                        if !value.1.isEmpty { hits[i].matchSource = value.1 }
+                    }
+                }
+            }
+        }
+    }
+    func updateCoverage() async {
+        let value = await Task.detached(priority: .utility) { LocalSearch.coverage() }.value
+        let changed = value.conversations != coverage.conversations
+        coverage = value
+        if changed && !query.isEmpty && !searching { search() }
+    }
+    func buildSemantics() {
+        guard semanticTask == nil, coverage.passages > coverage.embedded else { return }
+        semanticIndexing = true
+        semanticTask = Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            do {
+                try await SemanticIndexer.build { [weak self] in await self?.updateCoverage() }
+            } catch {
+                await MainActor.run { self.semanticNotice = error.localizedDescription }
+            }
+            await MainActor.run {
+                self.semanticIndexing = false
+                self.semanticTask = nil
+                self.search()
+            }
+        }
+    }
+    func refresh() async {
+        guard !refreshing else { return }
+        refreshing = true
+        let monitor = Task {
+            while !Task.isCancelled {
+                await updateCoverage()
+                do { try await Task.sleep(for: .seconds(2)) } catch { break }
+            }
+        }
+        defer { refreshing = false; monitor.cancel() }
+        do {
+            _ = try await Self.helper([])
+            await loadCache()
+            await updateCoverage()
+            buildSemantics()
+        } catch { self.error = "Couldn’t refresh the local index. Cached results are still available.\n\n\(error.localizedDescription)" }
+    }
+    func move(_ delta: Int) {
+        let list = visible
+        guard !list.isEmpty else { return }
+        let index = list.firstIndex { $0.id == selected } ?? 0
+        selected = list[max(0, min(list.count - 1, index + delta))].id
+    }
+    func copyCommand() {
+        guard let current else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(current.command, forType: .string)
+    }
+    func openSession() {
+        guard let session = current, session.available, !opening, !searching else { return }
+        opening = true
+        Task {
+            defer { opening = false }
+            do {
+                _ = try await Self.helper(["--validate"], input: JSONEncoder().encode(session))
+                try await Self.launch(session)
+            } catch { self.error = error.localizedDescription }
+        }
+    }
+    nonisolated static func helper(_ args: [String], input: Data? = nil) async throws -> Data {
+        guard let script = Bundle.main.url(forResource: "index_sessions", withExtension: "py") else {
+            throw AppError("The index helper is missing. Rebuild using scripts/build-app.sh.")
+        }
+        return try await Task.detached(priority: .utility) {
+            try run("/usr/bin/python3", [script.path] + args, input: input)
+        }.value
+    }
+    nonisolated static func run(_ executable: String, _ args: [String], input: Data? = nil) throws -> Data {
+        let p = Process(), out = Pipe(), err = Pipe(), stdin = Pipe()
+        p.executableURL = URL(fileURLWithPath: executable); p.arguments = args
+        p.standardOutput = out; p.standardError = err
+        if input != nil { p.standardInput = stdin }
+        try p.run()
+        if let input { stdin.fileHandleForWriting.write(input); try? stdin.fileHandleForWriting.close() }
+        // Helper/AppleScript output is bounded to a single short response.
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let errors = err.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else {
+            throw AppError(String(data: errors, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Command failed.")
+        }
+        return data
+    }
+    nonisolated static func appleString(_ text: String) -> String {
+        "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\r", with: "\\r") + "\""
+    }
+    nonisolated static func launch(_ session: Session) async throws {
+        // Create a fresh tab with its command at process creation. Never write into
+        // an existing session or use keystrokes (which could hit a running agent).
+        let command = "/bin/zsh -lic " + Session.quote(session.command + "; exec /bin/zsh -l")
+        let hasITerm = await MainActor.run { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.googlecode.iterm2") != nil }
+        let script: String
+        if hasITerm {
+            script = TerminalScript.iTerm(command: command)
+        } else {
+            script = "tell application id \"com.apple.Terminal\"\ndo script \(appleString(command))\nactivate\nend tell"
+        }
+        do {
+            _ = try await Task.detached(priority: .userInitiated) { try run("/usr/bin/osascript", ["-e", script]) }.value
+        } catch {
+            throw AppError("Couldn’t open the session in a new terminal tab. If Automation access was denied, allow Backtrack to control iTerm or Terminal in System Settings → Privacy & Security → Automation. You can also copy the resume command.\n\n\(error.localizedDescription)")
+        }
+    }
+}
+struct AppError: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}
