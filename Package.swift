@@ -6,5 +6,6 @@ let package = Package(name: "Backtrack", platforms: [.macOS(.v14)], products: [
     .systemLibrary(name: "CSQLite"),
     .target(name: "BacktrackCore", dependencies: ["CSQLite"]),
     .executableTarget(name: "Backtrack", dependencies: ["BacktrackCore"]),
-    .testTarget(name: "BacktrackCoreTests", dependencies: ["BacktrackCore"])
+    .testTarget(name: "BacktrackCoreTests", dependencies: ["BacktrackCore"]),
+    .testTarget(name: "BacktrackAppTests", dependencies: ["Backtrack", "BacktrackCore"])
 ])

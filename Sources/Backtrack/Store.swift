@@ -7,7 +7,13 @@ import SwiftUI
     @Published var hits: [SearchHit] = []
     @Published var query = "" { didSet { if query != oldValue { search() } } }
     @Published var provider = "all" { didSet { if provider != oldValue { search() } } }
-    @Published var related = true { didSet { if related != oldValue { search() } } }
+    @Published var related = true {
+        didSet {
+            guard related != oldValue else { return }
+            if related { buildSemantics() } else { semanticTask?.cancel() }
+            search()
+        }
+    }
     @Published var recentFirst = true { didSet { if recentFirst != oldValue { search() } } }
     @Published var selected: String?
     @Published var refreshing = false
@@ -33,12 +39,19 @@ import SwiftUI
     private var engine = SearchEngine([])
     private var generation = 0
     private var searchTask: Task<Void, Never>?
-    private let cache = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Backtrack/sessions.json")
+    private let cache: URL
+    private let searchPath: String
+    private let refreshRunner: @Sendable () async throws -> Data
     var currentHit: SearchHit? { hits.first { $0.id == selected } }
     var current: Session? { hits.first { $0.id == selected }?.session }
     var visible: [SearchHit] { Array(hits.prefix(100)) }
 
-    init(preview: Bool = false, refreshOnStart: Bool = true) {
+    init(preview: Bool = false, refreshOnStart: Bool = true, cache: URL? = nil,
+         searchPath: String = LocalSearch.defaultPath,
+         refreshRunner: @escaping @Sendable () async throws -> Data = { try await Store.helper([]) }) {
+        self.cache = cache ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Backtrack/sessions.json")
+        self.searchPath = searchPath
+        self.refreshRunner = refreshRunner
         self.preview = preview
         if preview {
             let now = Date().timeIntervalSince1970
@@ -72,7 +85,7 @@ import SwiftUI
         snapshotFrozen = true
         searchTask?.cancel()
         searching = false
-        hits = (try? LocalSearch.search(query, sessions: sessions)) ?? []
+        hits = (try? LocalSearch.search(query, sessions: sessions, path: searchPath)) ?? []
         selected = hits.first(where: { $0.session.title.contains("Free Parking UI") })?.id ?? hits.first?.id
     }
     func loadCache() async {
@@ -94,7 +107,7 @@ import SwiftUI
         semanticSearching = false
         generation += 1
         let version = generation
-        let engine = engine, sessions = sessions, query = query, provider = provider, related = related, recent = recentFirst, preview = preview
+        let engine = engine, sessions = sessions, query = query, provider = provider, related = related, recent = recentFirst, preview = preview, path = searchPath
         searchTask?.cancel()
         lexicalTask?.cancel()
         snippetTask?.cancel(); snippetWorker?.cancel(); snippetTask = nil
@@ -113,7 +126,7 @@ import SwiftUI
                     return (hits, nil)
                 }
                 do {
-                    return (try LocalSearch.search(query, sessions: sessions, provider: provider, recentFirst: recent), nil)
+                    return (try LocalSearch.search(query, sessions: sessions, provider: provider, recentFirst: recent, path: path), nil)
                 } catch is CancellationError {
                     return ([], nil)
                 } catch {
@@ -135,7 +148,7 @@ import SwiftUI
                 try await Task.sleep(for: .milliseconds(140))
                 guard version == generation, !Task.isCancelled else { return }
                 semanticSearching = true
-                let semantic = try await semanticEngine.search(query, sessions: sessions, provider: provider, recentFirst: recent)
+                let semantic = try await semanticEngine.search(query, sessions: sessions, provider: provider, recentFirst: recent, path: path)
                 guard version == generation, !Task.isCancelled else { return }
                 semanticNotice = ""
                 // Exact/prefix results retain their excerpts. Meaning-only hits are labelled.
@@ -143,7 +156,10 @@ import SwiftUI
                 hits = LocalSearch.sort(hits + semantic.filter { !exactIDs.contains($0.id) })
                 if selected == nil { selected = hits.first?.id }
             } catch is CancellationError { return }
-            catch { semanticNotice = "Semantic search unavailable; full-text results are still shown." }
+            catch {
+                guard version == generation, !Task.isCancelled else { return }
+                semanticNotice = "Semantic search unavailable; full-text results are still shown."
+            }
             guard version == generation else { return }
             semanticSearching = false
         }
@@ -155,7 +171,7 @@ import SwiftUI
             if requestedSnippets.insert(hit.id).inserted { pendingSnippets.insert(hit.id) }
         }
         guard snippetTask == nil, !pendingSnippets.isEmpty else { return }
-        let version = generation, query = query
+        let version = generation, query = query, path = searchPath
         snippetTask = Task {
             defer { if generation == version { snippetTask = nil } }
             do { try await Task.sleep(for: .milliseconds(30)) } catch { return }
@@ -163,7 +179,7 @@ import SwiftUI
                 let ids = pendingSnippets; pendingSnippets.removeAll()
                 let sessions = hits.filter { ids.contains($0.id) }.map(\.session)
                 let worker = Task.detached(priority: .userInitiated) {
-                    (try? LocalSearch.snippets(query, sessions: sessions)) ?? [:]
+                    (try? LocalSearch.snippets(query, sessions: sessions, path: path)) ?? [:]
                 }
                 snippetWorker = worker
                 let values = await worker.value
@@ -178,25 +194,35 @@ import SwiftUI
         }
     }
     func updateCoverage() async {
-        let value = await Task.detached(priority: .utility) { LocalSearch.coverage() }.value
+        let path = searchPath
+        let value = await Task.detached(priority: .utility) { LocalSearch.coverage(path: path) }.value
         let changed = value.conversations != coverage.conversations
         coverage = value
-        if changed && !query.isEmpty && !searching { search() }
+        if changed && sessions.isEmpty { await loadCache() }
+        else if changed && !query.isEmpty && !searching { search() }
     }
     func buildSemantics() {
-        guard semanticTask == nil, coverage.passages > coverage.embedded else { return }
+        guard related, !preview, semanticTask == nil, coverage.passages > coverage.embedded else { return }
         semanticIndexing = true
+        let path = searchPath
         semanticTask = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
+            var succeeded = false
             do {
-                try await SemanticIndexer.build { [weak self] in await self?.updateCoverage() }
+                try await SemanticIndexer.build(path: path) { [weak self] in await self?.updateCoverage() }
+                succeeded = true
+            } catch is CancellationError {
+                // Switching meaning search off is not an error.
             } catch {
                 await MainActor.run { self.semanticNotice = error.localizedDescription }
             }
+            let cancelled = Task.isCancelled, completed = succeeded
             await MainActor.run {
                 self.semanticIndexing = false
                 self.semanticTask = nil
-                self.search()
+                if completed && self.related { self.semanticNotice = ""; self.search() }
+                // The toggle may have switched back on while cancellation drained.
+                if cancelled && self.related { self.buildSemantics() }
             }
         }
     }
@@ -211,8 +237,11 @@ import SwiftUI
         }
         defer { refreshing = false; monitor.cancel() }
         do {
-            _ = try await Self.helper([])
-            await loadCache()
+            let summary = try JSONDecoder().decode(RefreshSummary.self, from: await refreshRunner())
+            if summary.changed || sessions.isEmpty { await loadCache() }
+            notice = summary.warnings.joined(separator: "\n")
+            // Cache contents needn't change for a refresh to be successful.
+            indexedAt = Date()
             await updateCoverage()
             buildSemantics()
         } catch { self.error = "Couldn’t refresh the local index. Cached results are still available.\n\n\(error.localizedDescription)" }
@@ -244,7 +273,7 @@ import SwiftUI
             throw AppError("The index helper is missing. Rebuild using scripts/build-app.sh.")
         }
         return try await Task.detached(priority: .utility) {
-            try run("/usr/bin/python3", [script.path] + args, input: input)
+            try run("/usr/bin/python3", ["-B", script.path] + args, input: input)
         }.value
     }
     nonisolated static func run(_ executable: String, _ args: [String], input: Data? = nil) throws -> Data {
@@ -283,6 +312,10 @@ import SwiftUI
             throw AppError("Couldn’t open the session in a new terminal tab. If Automation access was denied, allow Backtrack to control iTerm or Terminal in System Settings → Privacy & Security → Automation. You can also copy the resume command.\n\n\(error.localizedDescription)")
         }
     }
+}
+private struct RefreshSummary: Decodable {
+    let changed: Bool
+    let warnings: [String]
 }
 struct AppError: LocalizedError {
     let message: String

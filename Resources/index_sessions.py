@@ -13,9 +13,16 @@ import sys
 import tempfile
 import time
 import uuid
+from history_cache import read_histories
 
 VERSION = 1
+PARENT_PID = None  # Set only by the subprocess entry point, not library/tests.
 UUID = re.compile(r'^[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$')
+
+
+def check_parent():
+    if PARENT_PID is not None and (PARENT_PID == 1 or os.getppid() != PARENT_PID):
+        raise SystemExit(0)
 
 
 def clean(s, limit=1600):
@@ -186,23 +193,12 @@ def index(home, cache):
                  first=meta.get('first') or clean(entry.get('firstPrompt')),
                  latest=meta.get('latest', ''), updated=meta.get('updated') or stamp(entry.get('modified')) or stat.st_mtime)
         records[s['id']] = s
-    # Histories are compact human prompts, not multi-gigabyte tool transcripts.
-    prompt_history = {}
-    for provider, path in [('codex', codex / 'history.jsonl'), ('claude', claude / 'history.jsonl')]:
-        for d in lines(path):
-            key = provider + ':' + str(d.get('session_id') or d.get('sessionId'))
-            if key not in records:
-                continue
-            text = clean(d.get('text') if provider == 'codex' else d.get('display'))
-            if not text:
-                continue
-            ts = stamp(d.get('ts') if provider == 'codex' else d.get('timestamp'))
-            h = prompt_history.setdefault(key, dict(first=text, latest=text, updated=0, prompts=[]))
-            if ts >= h['updated']:
-                h.update(latest=text, updated=ts)
-            h['prompts'].append(text)
-            h['prompts'] = h['prompts'][-24:]
+    # Only new complete prompt-history records are parsed/normalized on refresh.
+    with contextlib.closing(open_search_db(cache)) as history_db:
+        prompt_history = read_histories(home, history_db, clean, stamp)
     for key, h in prompt_history.items():
+        if key not in records:
+            continue
         s = records[key]
         s['first'] = s['first'] or h['first']
         s['latest'] = h['latest']
@@ -241,14 +237,23 @@ def index(home, cache):
         s['available'] = Path(s['cwd']).is_dir()
     result = dict(version=VERSION, indexedAt=time.time(), duration=time.monotonic() - started,
                   warnings=warnings, sessions=sorted(records.values(), key=lambda s: s['updated'], reverse=True))
-    atomic_json(cache / 'claude-metadata.json', next_cache)
-    atomic_json(cache / 'sessions.json', result)
-    failed = index_transcripts(result['sessions'], cache)
+    if previous != next_cache:
+        atomic_json(cache / 'claude-metadata.json', next_cache)
+    old_index = read_json(cache / 'sessions.json', {})
+    metadata_changed = (old_index.get('version') != VERSION or
+                        old_index.get('sessions') != result['sessions'] or
+                        old_index.get('warnings') != result['warnings'])
+    # Publish metadata early during an initial/changed transcript backfill.
+    if metadata_changed:
+        atomic_json(cache / 'sessions.json', result)
+    failed, transcript_changes = index_transcripts(result['sessions'], cache)
     if failed:
         result['warnings'].append(f'{failed} conversations could not be indexed; refresh to retry.')
+        atomic_json(cache / 'sessions.json', result)
     result['duration'] = time.monotonic() - started
-    atomic_json(cache / 'sessions.json', result)
+    result['changed'] = metadata_changed or transcript_changes > 0 or failed > 0
     return result
+
 
 
 def atomic_json(path, value):
@@ -312,7 +317,7 @@ def conversation_message(d, s):
     return role, re.sub(r'\s+', ' ', content).strip()
 
 
-def ensure_search_acceleration(db):
+def ensure_search_acceleration_v2(db):
     """One atomic cache-only migration; native agent stores are never touched."""
     if db.execute('PRAGMA user_version').fetchone()[0] >= 2:
         return
@@ -353,6 +358,24 @@ def ensure_search_acceleration(db):
 
 
 
+def ensure_search_acceleration(db):
+    ensure_search_acceleration_v2(db)
+    if db.execute('PRAGMA user_version').fetchone()[0] >= 3:
+        return
+    # Also repair invalid-length vectors, rather than repeatedly launching an
+    # indexer whose queue incorrectly considers those passages complete.
+    db.executescript("""
+        BEGIN IMMEDIATE;
+        DROP INDEX IF EXISTS pending_embeddings;
+        CREATE INDEX pending_embeddings ON passages(session_id,id)
+            WHERE embedding IS NULL OR model IS NULL
+                OR model!='minilm-l6-v2-qint8-arm64-1110a243-mean-256-v1'
+                OR length(embedding)!=1536;
+        PRAGMA user_version=3;
+        COMMIT;
+    """)
+
+
 def open_search_db(cache):
     path = cache / 'search.sqlite'
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -376,6 +399,7 @@ def open_search_db(cache):
 def index_transcripts(sessions, cache):
     import hashlib
     with contextlib.closing(open_search_db(cache)) as db:
+        changed = 0
         valid = {s['id'] for s in sessions}
         db.executemany('INSERT INTO session_recency(id,updated) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET updated=excluded.updated WHERE updated!=excluded.updated', [(s['id'], s['updated']) for s in sessions])
         # FTS UNINDEXED identity columns do not have a lookup index. Resolve rowids
@@ -383,6 +407,7 @@ def index_transcripts(sessions, cache):
         rowids = {sid: rowid for rowid, sid in db.execute('SELECT rowid,id FROM search')}
         for (sid,) in db.execute('SELECT id FROM files').fetchall():
             if sid not in valid:
+                changed += 1
                 db.execute('DELETE FROM search WHERE rowid=?', (rowids.get(sid, -1),))
                 db.execute('DELETE FROM passages WHERE session_id=?', (sid,))
                 db.execute('DELETE FROM files WHERE id=?', (sid,))
@@ -390,6 +415,7 @@ def index_transcripts(sessions, cache):
         db.commit()
         failed = 0
         for s in sessions:  # newest first; results become available during backfill
+            check_parent()
             try:
                 path = Path(s['transcript'])
                 stat = path.stat()
@@ -407,7 +433,11 @@ def index_transcripts(sessions, cache):
                     # Stop at the captured EOF. Leave an incomplete last line for the next refresh.
                     with path.open('rb') as f:
                         f.seek(offset)
+                        records_read = 0
                         while f.tell() < stat.st_size:
+                            if records_read % 256 == 0:
+                                check_parent()
+                            records_read += 1
                             start = f.tell()
                             raw = f.readline()
                             if not raw.endswith(b'\n'):
@@ -438,13 +468,26 @@ def index_transcripts(sessions, cache):
                 db.execute('INSERT INTO search(id,title,location,context,user,assistant) VALUES(?,?,?,?,?,?)', (s['id'],) + metadata + ('\n'.join(content['user']), '\n'.join(content['assistant'])))
                 db.execute('INSERT OR REPLACE INTO files VALUES(?,?,?,?,?,?)', (s['id'], str(path), stat.st_ino, stat.st_size, stat.st_mtime_ns, offset if not unchanged else old[4]))
                 db.commit()
+                changed += 1
             except OSError:
                 db.rollback()
                 failed += 1
-        return failed
+        prune_semantic_changes(db)
+        db.commit()
+        return failed, changed
+
+
+def prune_semantic_changes(db, retain=8192):
+    # Swift reloads the matrix for gaps >4096, so a larger retained tail safely
+    # bounds the journal without losing updates for any incremental reader.
+    # Never reset the AUTOINCREMENT sequence or remove the newest revision.
+    db.execute('DELETE FROM semantic_changes WHERE seq <= (SELECT coalesce(max(seq),0) FROM semantic_changes)-?', (retain,))
 
 
 def main():
+    global PARENT_PID
+    PARENT_PID = os.getppid()
+    check_parent()
     p = argparse.ArgumentParser()
     p.add_argument('--home', type=Path, default=Path.home())
     p.add_argument('--cache', type=Path)
@@ -456,9 +499,15 @@ def main():
     cache = args.cache or args.home / 'Library/Application Support/Backtrack'
     cache.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (cache / '.index.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        while True:
+            check_parent()
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                time.sleep(0.1)
         result = index(args.home, cache)
-    print(json.dumps(dict(count=len(result['sessions']), seconds=result['duration'], warnings=result['warnings'])))
+    print(json.dumps(dict(count=len(result['sessions']), seconds=result['duration'], warnings=result['warnings'], changed=result['changed'])))
 
 if __name__ == '__main__':
     try:

@@ -11,5 +11,5 @@
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSHighResolutionCapable</key><true/>
-<key>NSAppleEventsUsageDescription</key><string>Backtrack opens your chosen saved conversation in a new terminal window. It never types into existing tabs.</string>
+<key>NSAppleEventsUsageDescription</key><string>Backtrack opens your chosen saved conversation in a fresh iTerm tab, or a new Terminal window. It never types into existing tabs.</string>
 </dict></plist>

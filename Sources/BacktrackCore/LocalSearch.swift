@@ -227,57 +227,24 @@ public enum SemanticIndexer {
         guard available else { throw SearchFailure("Semantic model not installed. Run scripts/setup-semantic.sh. Full-text search still works.") }
         let process = Process(), output = Pipe(), error = Pipe()
         process.executableURL = URL(fileURLWithPath: python)
-        process.arguments = [script, "--index", path]
+        process.arguments = ["-B", script, "--index", path]
         process.standardOutput = output; process.standardError = error
         try process.run()
         do {
+            var nextProgress = ContinuousClock.now
             while process.isRunning {
                 try Task.checkCancellation()
-                await progress()
-                try await Task.sleep(for: .seconds(2))
+                if ContinuousClock.now >= nextProgress {
+                    await progress()
+                    nextProgress = ContinuousClock.now.advanced(by: .seconds(2))
+                }
+                try await Task.sleep(for: .milliseconds(100))
             }
+            try Task.checkCancellation()
         } catch { if process.isRunning { process.terminate() }; throw error }
         let message = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         guard process.terminationStatus == 0 else { throw SearchFailure("Semantic indexing unavailable. " + message) }
         await progress()
-    }
-}
-
-/// A single local process held by the semantic actor; no network or main-thread work.
-private final class EmbeddingWorker {
-    let process = Process(), input = Pipe(), output = Pipe()
-    private var cached: [String: [Float]] = [:]
-    private var order: [String] = []
-    init() throws {
-        guard SemanticIndexer.available else { throw SearchFailure("Local semantic runtime is not installed.") }
-        process.executableURL = URL(fileURLWithPath: SemanticIndexer.python)
-        process.arguments = [SemanticIndexer.script, "--serve"]
-        process.standardInput = input; process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-    }
-    deinit {
-        try? input.fileHandleForWriting.close()
-        if process.isRunning { process.terminate() }
-    }
-    func vector(_ query: String) throws -> [Float] {
-        let key = SearchEngine.normalize(query).trimmingCharacters(in: .whitespacesAndNewlines)
-        if let vector = cached[key] { return vector }
-        guard process.isRunning else { throw SearchFailure("Local semantic worker stopped.") }
-        var request = try JSONSerialization.data(withJSONObject: ["query": query]); request.append(10)
-        try input.fileHandleForWriting.write(contentsOf: request)
-        var data = Data()
-        while !data.contains(10) {
-            let chunk = output.fileHandleForReading.availableData
-            guard !chunk.isEmpty else { throw SearchFailure("Local semantic worker could not load the model.") }
-            data.append(chunk)
-            guard data.count < 100_000 else { throw SearchFailure("Invalid semantic worker response.") }
-        }
-        let vector = try JSONDecoder().decode([Float].self, from: data)
-        guard vector.count == SemanticIndexer.dimension, vector.allSatisfy({ $0.isFinite }) else { throw SearchFailure("Invalid embedding dimensions.") }
-        cached[key] = vector; order.append(key)
-        if order.count > 24 { cached.removeValue(forKey: order.removeFirst()) }
-        return vector
     }
 }
 
@@ -288,6 +255,7 @@ public actor SemanticSearch {
     private var positions: [Int64: Int] = [:]
     private var loadedRevision: Int64 = -1
     private var loadedPath = ""
+    var cachedPassageCount: Int { rows.count }
     public init() {}
     public func search(_ query: String, sessions: [Session], provider: String = "all", recentFirst: Bool = true, path: String = LocalSearch.defaultPath, now: Double = Date().timeIntervalSince1970) throws -> [SearchHit] {
         let started = Date()
@@ -323,7 +291,12 @@ public actor SemanticSearch {
             if score > (winners[session.id]?.1 ?? 0) { winners[session.id] = (rows[i].0, score) }
         }
         var hits: [SearchHit] = []
-        for (id, winner) in winners.sorted(by: { $0.value.1 > $1.value.1 }).prefix(12) {
+        let ordered = winners.sorted {
+            if $0.value.1 != $1.value.1 { return $0.value.1 > $1.value.1 }
+            let lhs = sessions[$0.key]?.updated ?? 0, rhs = sessions[$1.key]?.updated ?? 0
+            return lhs == rhs ? $0.key < $1.key : lhs > rhs
+        }
+        for (id, winner) in ordered.prefix(12) {
             guard let session = sessions[id] else { continue }
             let s = try db.statement("SELECT role,text FROM passages WHERE id=?", [String(winner.0)])
             defer { sqlite3_finalize(s) }
@@ -376,8 +349,17 @@ public actor SemanticSearch {
                             .copyMemory(from: bytes, byteCount: SemanticIndexer.dimension * 4)
                     }
                 } else if let index = positions.removeValue(forKey: id) {
-                    rows[index] = (0, "")
-                    for offset in 0..<SemanticIndexer.dimension { matrix[index * SemanticIndexer.dimension + offset] = 0 }
+                    // Swap-remove instead of accumulating dead zero-vector slots.
+                    let last = rows.count - 1, dimension = SemanticIndexer.dimension
+                    if index != last {
+                        rows[index] = rows[last]
+                        positions[rows[index].0] = index
+                        matrix.withUnsafeMutableBufferPointer { buffer in
+                            buffer.baseAddress!.advanced(by: index * dimension)
+                                .update(from: buffer.baseAddress!.advanced(by: last * dimension), count: dimension)
+                        }
+                    }
+                    rows.removeLast(); matrix.removeLast(dimension)
                 }
             }
             loadedRevision = revision; loadedPath = path

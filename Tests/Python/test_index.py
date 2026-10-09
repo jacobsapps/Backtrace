@@ -5,6 +5,8 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+import sys
+sys.path.insert(0, str(Path(__file__).parents[2] / "Resources"))
 
 spec = importlib.util.spec_from_file_location('indexer', Path(__file__).parents[2] / 'Resources/index_sessions.py')
 m = importlib.util.module_from_spec(spec)
@@ -12,7 +14,7 @@ spec.loader.exec_module(m)
 SID = '12345678-1234-1234-1234-123456789abc'
 OTHER = '12345678-1234-1234-1234-123456789def'
 
-class IndexTests(unittest.TestCase):
+class NativeFixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -36,6 +38,8 @@ class IndexTests(unittest.TestCase):
     def run_index(self):
         return m.index(self.home, self.cache)['sessions']
 
+
+class IndexTests(NativeFixture):
     def test_native_title_and_transcript_identity_win(self):
         s = self.run_index()[0]
         self.assertEqual(s['title'], 'Short native title')
@@ -123,10 +127,7 @@ class IndexTests(unittest.TestCase):
         self.assertEqual((self.cache / 'sessions.json').stat().st_mode & 0o777, 0o600)
         self.assertEqual(json.loads((self.cache / 'sessions.json').read_text())['version'], 1)
 
-if __name__ == '__main__':
-    unittest.main()
-
-class TranscriptTests(IndexTests):
+class TranscriptTests(NativeFixture):
     def db_search(self, query):
         with sqlite3.connect(self.cache / 'search.sqlite') as db:
             return db.execute('SELECT id FROM search WHERE search MATCH ?', (query,)).fetchall()
@@ -229,3 +230,77 @@ class TranscriptTests(IndexTests):
             self.assertEqual(db.execute("SELECT value FROM search_stats WHERE key='embedded:legacy:2'").fetchone()[0],1)
             m.ensure_search_acceleration(db)
             self.assertEqual(db.execute("SELECT value FROM search_stats WHERE key='passages'").fetchone()[0],1)
+
+class RefreshTests(NativeFixture):
+    def test_unchanged_refresh_preserves_cache_files_and_skips_prompt_cleaning(self):
+        from unittest.mock import patch
+        self.write(self.codex / 'history.jsonl', dict(session_id=SID, text='uniqueprompt', ts=200))
+        first = m.index(self.home, self.cache)
+        self.assertTrue(first['changed'])
+        before = (self.cache / 'sessions.json').stat().st_mtime_ns
+        original = m.clean
+        def no_history_normalization(value, *args):
+            self.assertNotEqual(value, 'uniqueprompt')
+            return original(value, *args)
+        with patch.object(m, 'clean', side_effect=no_history_normalization):
+            second = m.index(self.home, self.cache)
+        self.assertFalse(second['changed'])
+        self.assertEqual(before, (self.cache / 'sessions.json').stat().st_mtime_ns)
+        self.assertEqual(first['sessions'], second['sessions'])
+
+    def test_history_append_partial_completion_rewrite_rotation_and_removal(self):
+        path = self.codex / 'history.jsonl'
+        self.write(path, dict(session_id=SID, text='old prompt', ts=200))
+        self.run_index()
+        record = json.dumps(dict(session_id=SID, text='new prompt', ts=300)) + '\n'
+        with path.open('a') as f: f.write(record[:20])
+        self.assertEqual(self.run_index()[0]['latest'], 'old prompt')
+        with path.open('a') as f: f.write(record[20:])
+        self.assertEqual(self.run_index()[0]['latest'], 'new prompt')
+        self.write(path, dict(session_id=SID, text='rewritten', ts=400))
+        session = self.run_index()[0]
+        self.assertEqual(session['latest'], 'rewritten')
+        self.assertNotIn('old prompt', session['searchText'])
+        rotated = path.with_suffix('.old')
+        path.rename(rotated)
+        self.write(path, dict(session_id=SID, text='rotated', ts=500))
+        self.assertEqual(self.run_index()[0]['latest'], 'rotated')
+        path.unlink()
+        self.assertNotIn('rotated', self.run_index()[0]['searchText'])
+
+    def test_history_preserves_prompts_before_session_discovery(self):
+        self.write(self.codex / 'history.jsonl', dict(session_id=OTHER, text='late discovered', ts=500))
+        self.run_index()
+        other_path = self.path.with_name('rollout-test-' + OTHER + '.jsonl')
+        self.write(other_path, dict(type='session_meta', payload=dict(id=OTHER, cwd=str(self.cwd), source='cli')))
+        with sqlite3.connect(self.db) as db:
+            db.execute('INSERT INTO threads VALUES(?,?,?,?,?,?,?)', (OTHER,str(other_path),'cli',str(self.cwd),'Late title','',100))
+        session = next(s for s in self.run_index() if s['sessionID'] == OTHER)
+        self.assertEqual(session['latest'], 'late discovered')
+
+    def test_history_unchanged_prefix_with_rewrite_and_growth_rebuilds(self):
+        path = self.codex / 'history.jsonl'
+        self.write(path, dict(session_id=SID, text='original', ts=200))
+        self.run_index()
+        self.write(path, dict(session_id=SID, text='replacement message with substantially more characters', ts=300))
+        self.assertNotIn('original', self.run_index()[0]['searchText'])
+
+    def test_assistant_append_is_changed_without_metadata_change(self):
+        m.index(self.home, self.cache)
+        before = (self.cache / 'sessions.json').stat().st_mtime_ns
+        with self.path.open('a') as f:
+            f.write(json.dumps(dict(type='event_msg',payload=dict(type='agent_message',message='new assistant evidence'))) + '\n')
+        self.assertTrue(m.index(self.home, self.cache)['changed'])
+        self.assertEqual(before, (self.cache / 'sessions.json').stat().st_mtime_ns)
+
+    def test_orphaned_transcript_helper_stops(self):
+        from unittest.mock import patch
+        with patch.object(m, 'PARENT_PID', 101), patch.object(m.os, 'getppid', return_value=102):
+            with self.assertRaises(SystemExit):
+                m.check_parent()
+        with patch.object(m, 'PARENT_PID', 101), patch.object(m.os, 'getppid', return_value=101):
+            m.check_parent()
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -7,6 +7,18 @@ not just session titles. No transcript is sent to a service.
 ## Build and use
 
 Requires macOS 14+, Swift/Xcode command-line tools, and `/usr/bin/python3`.
+The `codex` and/or `claude` CLI must be installed to resume their sessions.
+
+Compile and launch directly from a checkout, without installing:
+
+```sh
+git clone https://github.com/jacobsapps/Backtrack.git
+cd Backtrack
+bash scripts/build-app.sh
+open dist/Backtrack.app
+```
+
+Or quit an existing Backtrack instance and install into `/Applications`:
 
 ```sh
 bash scripts/build-app.sh --install
@@ -25,6 +37,15 @@ quantized `sentence-transformers/all-MiniLM-L6-v2` model. Search itself is offli
 The runtime/model lives in `~/Library/Application Support/Backtrack/`, not in
 system Python. Missing dependencies show a status warning; full-text search
 continues working. The model is English-focused, not an LLM or an answer engine.
+
+Restart Backtrack or choose **Refresh sessions** after installing the model.
+Do not run both the checkout app and installed app at the same time: they share
+the cache and global keyboard shortcut.
+
+In restricted build environments that prohibit SwiftPM's nested sandbox, use
+`BACKTRACK_DISABLE_SPM_SANDBOX=1 bash scripts/build-app.sh` and
+`swift test --disable-sandbox`. This does not grant extra host permissions;
+installation still requires write access to `/Applications`.
 
 - **Control–Option–Space** summons Backtrack; **⌘L** focuses search.
 - **↑/↓** selects a conversation; **Return** or a click reopens it in a new tab.
@@ -73,6 +94,95 @@ matrix updates from a change journal, rather than reloading all embeddings, and
 index progress uses transactionally maintained counters instead of corpus scans.
 There is no listening server or network request. Initial indexing never blocks
 typing, and completed conversations are searchable during the backfill.
+
+## Architecture
+
+```text
+Read-only Codex / Claude stores
+          │
+          ▼
+Python adapters + incremental history/transcript indexing
+          │
+          ├── sessions.json: compact session metadata → SwiftUI Store
+          └── search.sqlite: FTS5 text + passages + embedding blobs
+                       │                         ▲
+                 Swift keyword search     Python MiniLM / ONNX backfill
+                       │                         │
+                       └──── Swift semantic comparison (Accelerate)
+                                           │
+                                  async ranked results + excerpts
+                                           │
+                         revalidate native ID/cwd → fresh iTerm tab
+```
+
+There is no backend service, network search, or listening local server.
+The subsystems have deliberately different responsibilities:
+
+| Subsystem | Implementation | Checks |
+| --- | --- | --- |
+| Native discovery and identity | `Resources/index_sessions.py` | Real-format fixtures: native ID/cwd, title sources, deleted sessions, source immutability, pre-launch revalidation |
+| Prompt-history cache | `Resources/history_cache.py` | Unchanged reads, append offsets, partial lines, rewrites, rotation, deletion, late session discovery |
+| Transcript/embedding storage | SQLite FTS5 and private cache tables | Incremental append/rewrite, excluded tool/system text, counters, migration, stale embedding writes, journal pruning |
+| Lexical retrieval | `Sources/BacktrackCore/LocalSearch.swift` | Transcript-only matches, typos, recency, provider filters, WAL reopen, lazy highlighted excerpts |
+| Meaning retrieval | MiniLM helper + Swift `SemanticSearch` actor | Actual-model paraphrase test; replacements/deletions reflected in a warm vector cache |
+| Worker protocol | `Sources/BacktrackCore/EmbeddingWorker.swift` | Real subprocesses simulating hangs, exit, malformed/oversized/chunked output, cancellation and fresh-worker recovery |
+| UI orchestration | `Sources/Backtrack/Store.swift` | Temporary-cache integration tests: unchanged refreshes, overlapping refreshes, metadata reload, stale queries/snippets |
+| Terminal handoff | `TerminalScript.swift` + Store launch | Shell/AppleScript escaping, exact native identity, fresh-tab script shape; live Automation behaviour needs a Mac smoke test |
+
+These tests establish specific behaviours, not a blanket guarantee. Search
+quality for every paraphrase is not proven; neither are future changes to native
+agent storage formats. UI layout and live iTerm/Terminal Automation are not
+covered by the unit suite. The app is still a personal prototype.
+
+### What "semantic" means here
+
+This is **a pretrained model, not custom-trained ML**. Backtrack does not train
+on conversations. It performs inference locally using a pinned, ARM64-int8
+ONNX export of `sentence-transformers/all-MiniLM-L6-v2`, with ONNX Runtime's
+CPU execution provider (two inference threads), Hugging Face Tokenizers, and NumPy.
+It does **not** use Core ML, Apple Intelligence, or Apple's Natural Language
+sentence embeddings. SwiftUI/AppKit provide the app UI; Apple's **Accelerate**
+framework handles the vector-comparison math.
+
+1. Saved user/assistant text is split into roughly 1,100-character passages,
+   overlapping by 200 characters. The tokenizer limits each passage to 256 tokens.
+2. MiniLM produces token vectors. Masked mean pooling and normalization produce
+   one **384-number float vector** per passage, persisted in SQLite.
+3. A query goes through the same model. Accelerate computes dot products against
+   the normalized cached vectors—equivalent to cosine similarity.
+4. Matches below 0.42 similarity are excluded; surviving passages are grouped by
+   session, strongly weighted for recency, and merged with lexical results.
+   A meaning match never fabricates literal keyword highlighting.
+
+The model download is about 23 MB, but that is **not total RAM use**: the runtime,
+query worker, and float-vector matrix also take memory. At roughly 115,000
+passages, the vectors alone occupy about 169 MiB. Warm model/vector caches are
+intentionally retained for fast subsequent queries. Disabling meaning search
+stops new queries and cancels backfill, but retains those caches for re-enabling.
+Deleted vectors are removed from the live matrix; the change journal retains a
+bounded tail, and readers that fall behind reload from the authoritative cache.
+
+### Refresh and background work
+
+- On launch, show cached sessions, then refresh.
+- On activation, refresh if the last successful refresh was over **20 seconds** ago.
+- While the app is active, refresh every **60 seconds**; **⌘R** refreshes manually.
+- Native prompt histories and transcripts are incremental. New complete records
+  are consumed; unchanged history is not reparsed/normalized. Rewrites/rotation
+  rebuild the affected cached history. A successful unchanged refresh advances
+  freshness without rewriting metadata or re-running the active search.
+- Existing embeddings are reused. Pending work is selected newest-first in
+  256-passage pages, encoded/committed eight at a time. The helper exits when done;
+  it can continue while the window is hidden. A file lock prevents duplicate
+  backfills, and parent-exit/cancellation checks stop abandoned work.
+- Progress is polled every two seconds **during indexing**, using small counters,
+  not full-vector scans. The query worker waits on stdin between searches.
+- The query worker has a five-second deadline and cancellation checks. On failure,
+  it is discarded; keyword results remain usable and a later query can restart it.
+
+An initial full transcript scan/embedding backfill is much heavier than a normal
+refresh. A cold semantic query loads the model and vector matrix; warm timings do
+not include that cost. Query/result work runs off the UI thread.
 
 ## Data and correctness
 

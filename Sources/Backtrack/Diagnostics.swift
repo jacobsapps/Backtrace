@@ -12,9 +12,10 @@ enum Diagnostics {
     static var databasePath: String { fixture?.appendingPathComponent("corpus.sqlite").path ?? LocalSearch.defaultPath }
 
     @MainActor static func verifySearch() {
-        NSApplication.shared.setActivationPolicy(.prohibited)
+        // This is a Store integration check, not a UI launch. Avoid registering
+        // NSApplication so it also runs in headless/restricted build environments.
         Task {
-            let store = Store(refreshOnStart: false)
+            let store = Store(refreshOnStart: false, cache: indexPath, searchPath: databasePath)
             await store.loadCache()
             store.query = "background ios"
             try? await Task.sleep(for: .milliseconds(90))
@@ -73,7 +74,7 @@ enum Diagnostics {
     static func embedIndex() {
         Task.detached(priority: .utility) {
             do {
-                try await SemanticIndexer.build { }
+                try await SemanticIndexer.build(path: databasePath) { }
                 let coverage = LocalSearch.coverage(path: databasePath)
                 print("Semantic passages: \(coverage.embedded)/\(coverage.passages)")
                 exit(0)
@@ -87,7 +88,7 @@ enum Diagnostics {
         let args = CommandLine.arguments
         guard let flag = args.firstIndex(of: "--snapshot"), flag + 1 < args.count else { exit(2) }
         NSApplication.shared.setActivationPolicy(.prohibited)
-        let store = Store(preview: true)
+        let store = Store(preview: true, searchPath: databasePath)
         let host = NSHostingView(rootView: ContentView(store: store))
         let compact = args.contains("--compact")
         if args.contains("--search-preview") { store.query = "backtrack" }

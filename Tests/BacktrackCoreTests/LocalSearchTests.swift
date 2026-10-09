@@ -129,6 +129,8 @@ final class LocalSearchTests: XCTestCase {
         let engine = SemanticSearch()
         let first = try await engine.search("make the app start faster", sessions: [a,b], path: path, now: now)
         XCTAssertEqual(first.first?.id, "a")
+        let initialCount = await engine.cachedPassageCount
+        XCTAssertEqual(initialCount, 2)
         let db = try SearchDatabase(path, writable: true)
         try db.execute("UPDATE passages SET text=?,embedding=NULL,model=NULL WHERE session_id='a'", ["Choose a restaurant for dinner tonight."])
         try db.execute("UPDATE passages SET text=?,embedding=NULL,model=NULL WHERE session_id='b'", ["Improve application launch performance and reduce loading delays."])
@@ -140,6 +142,33 @@ final class LocalSearchTests: XCTestCase {
         try db.execute("DELETE FROM passages WHERE session_id='b'")
         let removed = try await engine.search("make the app start faster", sessions: [a,b], path: path, now: now)
         XCTAssertTrue(removed.isEmpty)
+        let remainingCount = await engine.cachedPassageCount
+        XCTAssertEqual(remainingCount, 1)
+    }
+
+    func testSemanticCacheSwapRemovesNonfinalRowsAndSurvivesIDReuse() async throws {
+        guard SemanticIndexer.available else { throw XCTSkip("Install local model") }
+        let a = try add("a", text: "Improve application launch performance and reduce loading delays.")
+        let b = try add("b", text: "Choose a restaurant for dinner tonight.")
+        let c = try add("c", text: "Choose a restaurant for dinner tonight.")
+        try await SemanticIndexer.build(path: path) { }
+        let engine = SemanticSearch()
+        _ = try await engine.search("make the app start faster", sessions: [a,b,c], path: path, now: now)
+        let db = try SearchDatabase(path, writable: true)
+        try db.execute("DELETE FROM passages WHERE session_id='a'")
+        let deleted = try await engine.search("make the app start faster", sessions: [a,b,c], path: path, now: now)
+        XCTAssertTrue(deleted.isEmpty)
+        var count = await engine.cachedPassageCount
+        XCTAssertEqual(count, 2)
+        // c moved into a's slot; deleting it must use its updated position.
+        try db.execute("DELETE FROM passages WHERE session_id='c'")
+        _ = try await engine.search("make the app start faster", sessions: [a,b,c], path: path, now: now)
+        let d = try add("d", text: "Improve application launch performance and reduce loading delays.")
+        try await SemanticIndexer.build(path: path) { }
+        let reused = try await engine.search("make the app start faster", sessions: [a,b,c,d], path: path, now: now)
+        XCTAssertEqual(reused.map(\.id), ["d"])
+        count = await engine.cachedPassageCount
+        XCTAssertEqual(count, 2)
     }
 
 }
