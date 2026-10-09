@@ -2,12 +2,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 case "${1:-}" in ""|--install) ;; *) echo 'Usage: scripts/build-app.sh [--install]' >&2; exit 2;; esac
-SPM_FLAGS=()
+SWIFT_BUILD=(swift build -c release)
 # Opt-in for environments that prohibit SwiftPM's nested sandbox. This does not
 # change the host's sandbox/permissions or the built application's behaviour.
-if [[ "${BACKTRACK_DISABLE_SPM_SANDBOX:-0}" == 1 ]]; then SPM_FLAGS+=(--disable-sandbox); fi
-swift build -c release "${SPM_FLAGS[@]}"
-BIN="$(swift build -c release "${SPM_FLAGS[@]}" --show-bin-path)/Backtrack"
+if [[ "${BACKTRACK_DISABLE_SPM_SANDBOX:-0}" == 1 ]]; then SWIFT_BUILD+=(--disable-sandbox); fi
+"${SWIFT_BUILD[@]}"
+BIN="$("${SWIFT_BUILD[@]}" --show-bin-path)/Backtrack"
 APP="$PWD/dist/Backtrack.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Ship the existing icon as a normal source asset. Rebuilding the application
