@@ -1,5 +1,5 @@
 import AppKit
-import BacktrackCore
+import BacktraceCore
 import SwiftUI
 
 @MainActor final class Store: ObservableObject {
@@ -56,7 +56,7 @@ import SwiftUI
         if preview {
             let now = Date().timeIntervalSince1970
             sessions = [
-                Session(id: "1", cwd: "/Users/demo/Projects/Backtrack", title: "A library for past conversations", branch: "main", first: "Build a small Mac app to find and resume saved coding conversations.", latest: "Let’s call it Backtrack. Search the actual conversation, not just its title, and show the matching passage.", searchText: "Backtrack local conversation search", updated: now - 86400),
+                Session(id: "1", cwd: "/Users/demo/Projects/Backtrace", title: "A library for past conversations", branch: "main", first: "Build a small Mac app to find and resume saved coding conversations.", latest: "Let’s call it Backtrace. Search the actual conversation, not just its title, and show the matching passage.", searchText: "Backtrace local conversation search", updated: now - 86400),
                 Session(id: "2", provider: "claude", cwd: "/Users/demo/Projects/ExampleApp", title: "Fix notification delivery", branch: "fix/push-registration", latest: "Check the registration path when the app returns to the foreground.", updated: now - 4200),
                 Session(id: "3", cwd: "/Users/demo/Projects/PersonalSite", title: "Turn blog snippets into tweets", latest: "Keep the code examples intact.", updated: now - 7000),
                 Session(id: "4", cwd: "/Users/demo/Projects/ExampleApp", title: "Audit feature flags", updated: now - 12000),
@@ -120,7 +120,7 @@ import SwiftUI
                 if preview {
                     var hits = engine.search(query, provider: provider, related: false, recentFirst: recent)
                     for i in hits.indices {
-                        hits[i].snippet = hits[i].session.latest.replacingOccurrences(of: "Backtrack", with: "⟦Backtrack⟧")
+                        hits[i].snippet = hits[i].session.latest.replacingOccurrences(of: "Backtrace", with: "⟦Backtrace⟧")
                         hits[i].matchSource = "Assistant reply"
                     }
                     return (hits, nil)
@@ -309,7 +309,7 @@ import SwiftUI
         do {
             _ = try await Task.detached(priority: .userInitiated) { try run("/usr/bin/osascript", ["-e", script]) }.value
         } catch {
-            throw AppError("Couldn’t open the session in a new terminal tab. If Automation access was denied, allow Backtrack to control iTerm or Terminal in System Settings → Privacy & Security → Automation. You can also copy the resume command.\n\n\(error.localizedDescription)")
+            throw AppError("Couldn’t open the session in a new terminal tab. If Automation access was denied, allow Backtrace to control iTerm or Terminal in System Settings → Privacy & Security → Automation. You can also copy the resume command.\n\n\(error.localizedDescription)")
         }
     }
 }

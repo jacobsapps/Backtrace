@@ -3,7 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$HOME/Library/Application Support/Backtrack"
-PYTHON="${BACKTRACK_PYTHON:-/opt/homebrew/bin/python3.13}"
+# Preserve existing installs: the virtual environment embeds absolute paths.
+PYTHON="${BACKTRACE_PYTHON:-${BACKTRACK_PYTHON:-/opt/homebrew/bin/python3.13}}"
 mkdir -p "$ROOT/models/minilm"
 chmod 700 "$ROOT"
 "$PYTHON" -m venv "$ROOT/semantic-runtime"

@@ -138,13 +138,13 @@ class TranscriptTests(NativeFixture):
 
     def test_assistant_and_old_middle_user_messages_are_searchable(self):
         self.append_message('user', 'The secret project codename is papercatalogue.')
-        self.append_message('assistant', 'We should call the Mac app Backtrack.')
+        self.append_message('assistant', 'We should call the Mac app Backtrace.')
         for i in range(35):
             self.append_message('user', f'Unrelated later prompt {i}')
         self.run_index()
-        self.assertTrue(self.db_search('backtrack'))
+        self.assertTrue(self.db_search('backtrace'))
         self.assertTrue(self.db_search('papercatalogue'))
-        self.assertTrue(self.db_search('backtrack AND papercatalogue'))
+        self.assertTrue(self.db_search('backtrace AND papercatalogue'))
 
     def test_tools_and_system_instructions_are_excluded(self):
         self.append_message('developer', 'excludeddeveloperterm')
@@ -173,7 +173,7 @@ class TranscriptTests(NativeFixture):
         self.assertFalse(self.db_search('olduniqueterm'))
 
     def test_unchanged_index_preserves_vectors_and_deleted_session_removed(self):
-        self.append_message('assistant', 'backtrack')
+        self.append_message('assistant', 'backtrace')
         self.run_index()
         with sqlite3.connect(self.cache / 'search.sqlite') as db:
             db.execute("UPDATE passages SET embedding=x'0000',model='test'")
@@ -182,7 +182,7 @@ class TranscriptTests(NativeFixture):
             self.assertEqual(db.execute('SELECT count(embedding) FROM passages').fetchone()[0], 1)
         self.path.unlink()
         self.run_index()
-        self.assertFalse(self.db_search('backtrack'))
+        self.assertFalse(self.db_search('backtrace'))
         with sqlite3.connect(self.cache / 'search.sqlite') as db:
             self.assertEqual(db.execute('SELECT count(*) FROM passages').fetchone()[0], 0)
 

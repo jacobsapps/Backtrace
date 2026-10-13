@@ -1,11 +1,11 @@
 // swift-tools-version: 5.9
 import PackageDescription
-let package = Package(name: "Backtrack", platforms: [.macOS(.v14)], products: [
-    .executable(name: "Backtrack", targets: ["Backtrack"])
+let package = Package(name: "Backtrace", platforms: [.macOS(.v14)], products: [
+    .executable(name: "Backtrace", targets: ["Backtrace"])
 ], targets: [
     .systemLibrary(name: "CSQLite"),
-    .target(name: "BacktrackCore", dependencies: ["CSQLite"]),
-    .executableTarget(name: "Backtrack", dependencies: ["BacktrackCore"]),
-    .testTarget(name: "BacktrackCoreTests", dependencies: ["BacktrackCore"]),
-    .testTarget(name: "BacktrackAppTests", dependencies: ["Backtrack", "BacktrackCore"])
+    .target(name: "BacktraceCore", dependencies: ["CSQLite"]),
+    .executableTarget(name: "Backtrace", dependencies: ["BacktraceCore"]),
+    .testTarget(name: "BacktraceCoreTests", dependencies: ["BacktraceCore"]),
+    .testTarget(name: "BacktraceAppTests", dependencies: ["Backtrace", "BacktraceCore"])
 ])

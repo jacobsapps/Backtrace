@@ -1,5 +1,5 @@
 import XCTest
-@testable import BacktrackCore
+@testable import BacktraceCore
 
 final class EmbeddingWorkerTests: XCTestCase {
     func worker(_ code: String, timeout: Double = 1) throws -> EmbeddingWorker {

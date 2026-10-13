@@ -1,8 +1,13 @@
 import XCTest
 import CSQLite
-@testable import BacktrackCore
+@testable import BacktraceCore
 
 final class LocalSearchTests: XCTestCase {
+    func testRenamePreservesExistingIndexAndModelLocations() {
+        let root = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Backtrack")
+        XCTAssertEqual(LocalSearch.defaultPath, root.appendingPathComponent("search.sqlite").path)
+        XCTAssertEqual(SemanticIndexer.python, root.appendingPathComponent("semantic-runtime/bin/python").path)
+    }
     let now = 1_800_000_000.0
     var folder: URL!
     var path: String { folder.appendingPathComponent("search.sqlite").path }
@@ -31,15 +36,15 @@ final class LocalSearchTests: XCTestCase {
         try LocalSearch.search(query, sessions: sessions, provider: provider, recentFirst: recent, path: path, now: now)
     }
     func testAssistantOnlyMatchHasHighlightedEvidence() throws {
-        let s = try add("a", text: "A long conversation about an app. We should name it Backtrack and give it a library interface.")
-        let hit = try XCTUnwrap(search("backtrack", [s]).first)
+        let s = try add("a", text: "A long conversation about an app. We should name it Backtrace and give it a library interface.")
+        let hit = try XCTUnwrap(search("backtrace", [s]).first)
         XCTAssertEqual(hit.id, "a")
-        XCTAssertTrue(hit.snippet.contains("⟦Backtrack⟧"))
+        XCTAssertTrue(hit.snippet.contains("⟦Backtrace⟧"))
         XCTAssertEqual(hit.matchSource, "Assistant reply")
         XCTAssertFalse(hit.semantic)
     }
     func testQuiescentWALCacheCanBeReadWithoutAllowingDataWrites() throws {
-        let session = try add("wal", text: "Find Backtrack after the background writer finishes.")
+        let session = try add("wal", text: "Find Backtrace after the background writer finishes.")
         do {
             let writer = try SearchDatabase(path, writable: true)
             let statement = try writer.statement("PRAGMA journal_mode=WAL")
@@ -47,7 +52,7 @@ final class LocalSearchTests: XCTestCase {
             _ = try writer.step(statement)
         }
         XCTAssertFalse(FileManager.default.fileExists(atPath: path + "-wal"))
-        XCTAssertEqual(try search("backtrack", [session]).first?.id, session.id)
+        XCTAssertEqual(try search("backtrace", [session]).first?.id, session.id)
         let reader = try SearchDatabase(path)
         XCTAssertThrowsError(try reader.execute("DELETE FROM passages"))
     }
@@ -65,34 +70,34 @@ final class LocalSearchTests: XCTestCase {
         XCTAssertEqual(Set(try search("backgroudn", [correct,typo]).map(\.id)), Set(["correct","typo"]))
     }
     func testRecencyStronglyWeightsFullTextAndCanBeDisabled() throws {
-        let old = try add("old", text: "backtrack", days: 120)
-        let new = try add("new", text: "backtrack")
-        let hits = try search("backtrack", [old,new])
+        let old = try add("old", text: "backtrace", days: 120)
+        let new = try add("new", text: "backtrace")
+        let hits = try search("backtrace", [old,new])
         XCTAssertEqual(hits.first?.id, "new")
         XCTAssertGreaterThan(hits[0].score / hits[1].score, 30)
-        let best = try search("backtrack", [old,new], recent: false)
+        let best = try search("backtrace", [old,new], recent: false)
         XCTAssertEqual(best[0].score, best[1].score, accuracy: 0.001)
     }
     func testProviderFilterAndDeletedSessionSnapshot() throws {
-        let a = try add("a", text: "backtrack")
-        let b = try add("b", text: "backtrack", provider: "claude")
-        XCTAssertEqual(try search("backtrack", [a,b], provider: "claude").map(\.id), ["b"])
-        XCTAssertEqual(try search("backtrack", [a]).map(\.id), ["a"])
+        let a = try add("a", text: "backtrace")
+        let b = try add("b", text: "backtrace", provider: "claude")
+        XCTAssertEqual(try search("backtrace", [a,b], provider: "claude").map(\.id), ["b"])
+        XCTAssertEqual(try search("backtrace", [a]).map(\.id), ["a"])
     }
     func testMetadataWorksWhileBackfillIsIncomplete() throws {
-        let s = Session(id: "pending", title: "Backtrack", updated: now)
-        XCTAssertEqual(try search("backtrack", [s]).first?.id, s.id)
+        let s = Session(id: "pending", title: "Backtrace", updated: now)
+        XCTAssertEqual(try search("backtrace", [s]).first?.id, s.id)
     }
     func testExcerptsLoadOnDemandWithoutDroppingResults() throws {
-        let sessions = try (0..<24).map { try add(String($0), text: "A backtrack passage for result \($0)") }
-        let hits = try LocalSearch.search("backtrack", sessions: sessions, path: path, snippetLimit: 2, now: now)
+        let sessions = try (0..<24).map { try add(String($0), text: "A backtrace passage for result \($0)") }
+        let hits = try LocalSearch.search("backtrace", sessions: sessions, path: path, snippetLimit: 2, now: now)
         XCTAssertEqual(hits.count, 24)
-        XCTAssertTrue(hits.prefix(2).allSatisfy { $0.snippet.contains("⟦backtrack⟧") })
+        XCTAssertTrue(hits.prefix(2).allSatisfy { $0.snippet.contains("⟦backtrace⟧") })
         XCTAssertTrue(hits.dropFirst(2).allSatisfy { $0.snippet.isEmpty })
         let wanted = hits.dropFirst(2).prefix(3).map(\.session)
-        let snippets = try LocalSearch.snippets("backtrack", sessions: wanted, path: path)
+        let snippets = try LocalSearch.snippets("backtrace", sessions: wanted, path: path)
         XCTAssertEqual(Set(snippets.keys), Set(wanted.map(\.id)))
-        XCTAssertTrue(snippets.values.allSatisfy { $0.0.contains("⟦backtrack⟧") && $0.1 == "Assistant reply" })
+        XCTAssertTrue(snippets.values.allSatisfy { $0.0.contains("⟦backtrace⟧") && $0.1 == "Assistant reply" })
     }
     func testFreshTerminalTabNeverWritesIntoExistingSession() {
         let script = TerminalScript.iTerm(command: "echo \"a\\b\"")
@@ -105,7 +110,7 @@ final class LocalSearchTests: XCTestCase {
     }
     func testSingleNamesDoNotReturnSpuriousSemanticMatches() async throws {
         let engine = SemanticSearch()
-        let hits = try await engine.search("backtrack", sessions: [], path: path)
+        let hits = try await engine.search("backtrace", sessions: [], path: path)
         XCTAssertTrue(hits.isEmpty)
     }
     func testSemanticParaphraseWithoutSharedTerms() async throws {

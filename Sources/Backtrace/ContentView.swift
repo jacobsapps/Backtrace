@@ -1,5 +1,5 @@
 import AppKit
-import BacktrackCore
+import BacktraceCore
 import SwiftUI
 
 private enum Notebook {
@@ -37,7 +37,7 @@ struct ContentView: View {
         .sheet(item: $detail) { session in
             SessionDetails(session: session, store: store)
         }
-        .alert("Backtrack", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
+        .alert("Backtrace", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("OK") { store.error = nil }
         } message: { Text(store.error ?? "") }
     }
@@ -47,7 +47,7 @@ struct ContentView: View {
             Image(systemName: "books.vertical")
                 .font(.system(size: 25, weight: .light))
                 .foregroundStyle(Notebook.accent).accessibilityHidden(true)
-            Text("Backtrack").font(.system(size: 28, weight: .regular, design: .serif)).tracking(-0.8)
+            Text("Backtrace").font(.system(size: 28, weight: .regular, design: .serif)).tracking(-0.8)
             Spacer()
             Menu {
                 Picker("Sessions", selection: $store.provider) {

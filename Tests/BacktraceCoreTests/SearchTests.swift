@@ -1,5 +1,5 @@
 import XCTest
-@testable import BacktrackCore
+@testable import BacktraceCore
 
 final class SearchTests: XCTestCase {
     let now = 1_800_000_000.0

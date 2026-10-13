@@ -1,5 +1,5 @@
 import AppKit
-import BacktrackCore
+import BacktraceCore
 import SwiftUI
 
 enum Diagnostics {
@@ -91,7 +91,7 @@ enum Diagnostics {
         let store = Store(preview: true, searchPath: databasePath)
         let host = NSHostingView(rootView: ContentView(store: store))
         let compact = args.contains("--compact")
-        if args.contains("--search-preview") { store.query = "backtrack" }
+        if args.contains("--search-preview") { store.query = "backtrace" }
         if args.contains("--empty-preview") { store.query = "nothing-matches-this" }
         if args.contains("--live-data") {
             let path = indexPath

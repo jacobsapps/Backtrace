@@ -1,7 +1,7 @@
 import XCTest
 import Combine
-@testable import Backtrack
-@testable import BacktrackCore
+@testable import Backtrace
+@testable import BacktraceCore
 
 private actor RefreshCounter {
     var calls = 0
@@ -26,7 +26,7 @@ final class StoreTests: XCTestCase {
         let sessions = (0..<32).map { Session(id: String($0), title: "Session \($0)", updated: 100) }
         for session in sessions {
             try db.execute("INSERT INTO files VALUES(?)", [session.id])
-            try db.execute("INSERT INTO search VALUES(?,?,?,?,?,?)", [session.id,session.title,"/tmp","","","We named it Backtrack."])
+            try db.execute("INSERT INTO search VALUES(?,?,?,?,?,?)", [session.id,session.title,"/tmp","","","We named it Backtrace."])
         }
         let index = SessionIndex(version: 1, indexedAt: 100, duration: 0, warnings: [], sessions: sessions)
         let cache = folder.appendingPathComponent("sessions.json")
@@ -79,14 +79,14 @@ final class StoreTests: XCTestCase {
         let store = Store(refreshOnStart: false, cache: cache, searchPath: path)
         store.related = false
         await store.loadCache()
-        store.query = "backtrack"
+        store.query = "backtrace"
         try await settled(store)
         XCTAssertEqual(store.hits.count, 32)
         let deferred = store.hits[20]
         XCTAssertTrue(deferred.snippet.isEmpty)
         store.ensureSnippet(for: deferred.id)
         try await Task.sleep(for: .milliseconds(200))
-        XCTAssertTrue(store.hits.first(where: { $0.id == deferred.id })?.snippet.contains("⟦Backtrack⟧") == true)
+        XCTAssertTrue(store.hits.first(where: { $0.id == deferred.id })?.snippet.contains("⟦Backtrace⟧") == true)
         store.ensureSnippet(for: store.hits[31].id)
         store.query = "unfindablezzzzzzzz"
         try await settled(store)

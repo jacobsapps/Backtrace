@@ -2,7 +2,7 @@ import Foundation
 import CSQLite
 import Accelerate
 
-// Private Backtrack cache only; native agent databases never use this wrapper.
+// Private Backtrace cache only; native agent databases never use this wrapper.
 // Every connection is owned by one operation. No shared SQLite or model handles.
 final class SearchDatabase {
     var handle: OpaquePointer?
@@ -58,6 +58,7 @@ public struct IndexCoverage: Sendable {
 
 public enum LocalSearch {
     public static var defaultPath: String {
+        // Durable pre-rename location: reuse the transcript index and model runtime.
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Backtrack/search.sqlite").path
     }
     public static func coverage(path: String = defaultPath) -> IndexCoverage {
@@ -274,7 +275,7 @@ public actor SemanticSearch {
         try db.execute("BEGIN")
         defer { try? db.execute("COMMIT") }
         try loadChanges(db, path: path)
-        if ProcessInfo.processInfo.environment["BACKTRACK_SEARCH_TIMINGS"] != nil {
+        if ProcessInfo.processInfo.environment["BACKTRACE_SEARCH_TIMINGS"] != nil || ProcessInfo.processInfo.environment["BACKTRACK_SEARCH_TIMINGS"] != nil {
             fputs(String(format: "Semantic encode: %.1f ms; vector refresh: %.1f ms\n", encoded.timeIntervalSince(started) * 1000, Date().timeIntervalSince(encoded) * 1000), stderr)
         }
         guard !rows.isEmpty else { return [] }

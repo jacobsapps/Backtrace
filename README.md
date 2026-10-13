@@ -1,8 +1,15 @@
-# Backtrack
+# Backtrace
 
 A native, local Mac library for finding and reopening Codex and Claude Code
 conversations. Full-text search includes saved user **and assistant messages**,
 not just session titles. No transcript is sent to a service.
+
+Previously named **Backtrack**. The installer replaces `/Applications/Backtrack.app`
+with `/Applications/Backtrace.app`. The internal bundle ID
+`com.jacobsapps.Backtrack` and `~/Library/Application Support/Backtrack/` are
+intentionally unchanged, preserving settings, indexed transcripts, and the local
+model/runtime without copying data or rebuilding embeddings. Existing `BACKTRACK_*`
+environment variables remain supported as aliases for `BACKTRACE_*`.
 
 ## Build and use
 
@@ -12,23 +19,23 @@ The `codex` and/or `claude` CLI must be installed to resume their sessions.
 Compile and launch directly from a checkout, without installing:
 
 ```sh
-git clone https://github.com/jacobsapps/Backtrack.git
-cd Backtrack
+git clone https://github.com/jacobsapps/Backtrace.git
+cd Backtrace
 bash scripts/build-app.sh
-open dist/Backtrack.app
+open dist/Backtrace.app
 ```
 
-Or quit an existing Backtrack instance and install into `/Applications`:
+Or quit an existing Backtrace instance and install into `/Applications`:
 
 ```sh
 bash scripts/build-app.sh --install
-open /Applications/Backtrack.app
+open /Applications/Backtrace.app
 ```
 
 For meaning-based search, install the optional local model/runtime once:
 
 ```sh
-# Apple Silicon; Homebrew Python 3.13, or set BACKTRACK_PYTHON explicitly.
+# Apple Silicon; Homebrew Python 3.13, or set BACKTRACE_PYTHON explicitly.
 bash scripts/setup-semantic.sh
 ```
 
@@ -38,16 +45,16 @@ The runtime/model lives in `~/Library/Application Support/Backtrack/`, not in
 system Python. Missing dependencies show a status warning; full-text search
 continues working. The model is English-focused, not an LLM or an answer engine.
 
-Restart Backtrack or choose **Refresh sessions** after installing the model.
+Restart Backtrace or choose **Refresh sessions** after installing the model.
 Do not run both the checkout app and installed app at the same time: they share
 the cache and global keyboard shortcut.
 
 In restricted build environments that prohibit SwiftPM's nested sandbox, use
-`BACKTRACK_DISABLE_SPM_SANDBOX=1 bash scripts/build-app.sh` and
+`BACKTRACE_DISABLE_SPM_SANDBOX=1 bash scripts/build-app.sh` and
 `swift test --disable-sandbox`. This does not grant extra host permissions;
 installation still requires write access to `/Applications`.
 
-- **Control–Option–Space** summons Backtrack; **⌘L** focuses search.
+- **Control–Option–Space** summons Backtrace; **⌘L** focuses search.
 - **↑/↓** selects a conversation; **Return** or a click reopens it in a new tab.
 - The main window stays compact: search, tab titles, folders, dates, and matching excerpts.
 - Results show short highlighted excerpts. Meaning-only matches have a sparkle indicator
@@ -60,7 +67,7 @@ Reopening creates a **fresh tab in the frontmost iTerm window**, using a command
 at tab creation, never typing into an existing tab. With no iTerm window it makes
 one. If iTerm is not installed, the Terminal fallback makes a new window (Terminal
 has no equivalent safe native tab-creation command). Automation permission may
-be required. Backtrack never closes, retitles, or injects keystrokes into your
+be required. Backtrace never closes, retitles, or injects keystrokes into your
 working sessions. It does not deduplicate against currently running agent sessions.
 
 ## Search and ranking
@@ -123,10 +130,10 @@ The subsystems have deliberately different responsibilities:
 | Native discovery and identity | `Resources/index_sessions.py` | Real-format fixtures: native ID/cwd, title sources, deleted sessions, source immutability, pre-launch revalidation |
 | Prompt-history cache | `Resources/history_cache.py` | Unchanged reads, append offsets, partial lines, rewrites, rotation, deletion, late session discovery |
 | Transcript/embedding storage | SQLite FTS5 and private cache tables | Incremental append/rewrite, excluded tool/system text, counters, migration, stale embedding writes, journal pruning |
-| Lexical retrieval | `Sources/BacktrackCore/LocalSearch.swift` | Transcript-only matches, typos, recency, provider filters, WAL reopen, lazy highlighted excerpts |
+| Lexical retrieval | `Sources/BacktraceCore/LocalSearch.swift` | Transcript-only matches, typos, recency, provider filters, WAL reopen, lazy highlighted excerpts |
 | Meaning retrieval | MiniLM helper + Swift `SemanticSearch` actor | Actual-model paraphrase test; replacements/deletions reflected in a warm vector cache |
-| Worker protocol | `Sources/BacktrackCore/EmbeddingWorker.swift` | Real subprocesses simulating hangs, exit, malformed/oversized/chunked output, cancellation and fresh-worker recovery |
-| UI orchestration | `Sources/Backtrack/Store.swift` | Temporary-cache integration tests: unchanged refreshes, overlapping refreshes, metadata reload, stale queries/snippets |
+| Worker protocol | `Sources/BacktraceCore/EmbeddingWorker.swift` | Real subprocesses simulating hangs, exit, malformed/oversized/chunked output, cancellation and fresh-worker recovery |
+| UI orchestration | `Sources/Backtrace/Store.swift` | Temporary-cache integration tests: unchanged refreshes, overlapping refreshes, metadata reload, stale queries/snippets |
 | Terminal handoff | `TerminalScript.swift` + Store launch | Shell/AppleScript escaping, exact native identity, fresh-tab script shape; live Automation behaviour needs a Mac smoke test |
 
 These tests establish specific behaviours, not a blanket guarantee. Search
@@ -136,7 +143,7 @@ covered by the unit suite. The app is still a personal prototype.
 
 ### What "semantic" means here
 
-This is **a pretrained model, not custom-trained ML**. Backtrack does not train
+This is **a pretrained model, not custom-trained ML**. Backtrace does not train
 on conversations. It performs inference locally using a pinned, ARM64-int8
 ONNX export of `sentence-transformers/all-MiniLM-L6-v2`, with ONNX Runtime's
 CPU execution provider (two inference threads), Hugging Face Tokenizers, and NumPy.
@@ -202,7 +209,7 @@ shown but cannot be reopened.
 
 The private cache contains conversation text and embeddings. SQLite/JSON files
 are mode 0600 in `~/Library/Application Support/Backtrack/` (directory 0700).
-Close Backtrack before deleting `sessions.json`, `search.sqlite*`, and
+Close Backtrace before deleting `sessions.json`, `search.sqlite*`, and
 `claude-metadata.json` to rebuild the indexes; leave `semantic-runtime` and
 `models` intact to avoid reinstalling. Default `~/.codex` and `~/.claude` stores
 are supported, not custom agent homes.
@@ -213,11 +220,11 @@ are supported, not custom agent homes.
 swift test
 /usr/bin/python3 -m unittest discover -s Tests/Python -v
 # Real cache timings and matching excerpts; output is private local data:
-dist/Backtrack.app/Contents/MacOS/Backtrack --benchmark
+dist/Backtrace.app/Contents/MacOS/Backtrace --benchmark
 # Fictional offscreen UI, no terminal/focus changes:
-dist/Backtrack.app/Contents/MacOS/Backtrack --snapshot "$PWD/.local/library.png" --search-preview
-# Actual Backtrack search and original development session, still offscreen:
-dist/Backtrack.app/Contents/MacOS/Backtrack --snapshot "$PWD/.local/live.png" --live-data
+dist/Backtrace.app/Contents/MacOS/Backtrace --snapshot "$PWD/.local/library.png" --search-preview
+# Actual Backtrace search and original development session, still offscreen:
+dist/Backtrace.app/Contents/MacOS/Backtrace --snapshot "$PWD/.local/live.png" --live-data
 ```
 
 Evidence is kept locally in ignored `.local/`. Tests cover native identity,
