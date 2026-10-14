@@ -1,6 +1,6 @@
 import AppKit
 
-// Breadcrumb: the chosen concept 06. One vector drawing drives the app icon,
+// Breadcrumb: the approved open-spiral b. One vector drawing drives the app icon,
 // the transparent header logo, and the monochrome menu-bar template.
 // Usage: swift scripts/render-icon.swift path/to/Backtrace.iconset
 let folder = URL(fileURLWithPath: CommandLine.arguments[1])
@@ -14,25 +14,25 @@ func color(_ hex: UInt32) -> CGColor {
 
 func drawMark(_ c: CGContext, line: CGColor, nodes: CGColor) {
     let route = CGMutablePath()
-    route.move(to: CGPoint(x: 69, y: 191))
-    route.addLine(to: CGPoint(x: 69, y: 153))
-    route.addQuadCurve(to: CGPoint(x: 95, y: 128), control: CGPoint(x: 69, y: 128))
-    route.addLine(to: CGPoint(x: 158, y: 128))
-    route.addQuadCurve(to: CGPoint(x: 185, y: 100), control: CGPoint(x: 185, y: 128))
-    route.addLine(to: CGPoint(x: 185, y: 93))
-    route.addQuadCurve(to: CGPoint(x: 158, y: 66), control: CGPoint(x: 185, y: 66))
-    route.addLine(to: CGPoint(x: 126, y: 66))
-    // The middle breadcrumb is a real cutout, including on transparent PDFs.
+    route.move(to: CGPoint(x: 70, y: 52))
+    route.addLine(to: CGPoint(x: 70, y: 160))
+    route.addCurve(to: CGPoint(x: 147, y: 194), control1: CGPoint(x: 70, y: 198), control2: CGPoint(x: 108, y: 211))
+    route.addCurve(to: CGPoint(x: 169, y: 116), control1: CGPoint(x: 188, y: 175), control2: CGPoint(x: 199, y: 138))
+    route.addCurve(to: CGPoint(x: 114, y: 136), control1: CGPoint(x: 142, y: 97), control2: CGPoint(x: 114, y: 110))
+    route.addCurve(to: CGPoint(x: 142, y: 153), control1: CGPoint(x: 114, y: 155), control2: CGPoint(x: 130, y: 165))
+    // Approved dot: 20 degrees up the lower-right curve, offset two units
+    // toward its outer wall. One unit of cream remains below the radius-8 dot.
+    // A real cutout preserves the same geometry on transparent PDFs.
     c.saveGState()
     c.addRect(CGRect(x: 0, y: 0, width: 256, height: 256))
-    c.addEllipse(in: CGRect(x: 116, y: 118, width: 20, height: 20))
+    c.addEllipse(in: CGRect(x: 134.0737, y: 190.1225, width: 16, height: 16))
     c.clip(using: .evenOdd)
     c.setStrokeColor(line); c.setLineWidth(22); c.setLineCap(.round)
     c.addPath(route); c.strokePath()
     c.restoreGState()
     c.setFillColor(nodes)
-    c.fillEllipse(in: CGRect(x: 55, y: 177, width: 28, height: 28))
-    c.fillEllipse(in: CGRect(x: 112, y: 52, width: 28, height: 28))
+    c.fillEllipse(in: CGRect(x: 56, y: 38, width: 28, height: 28))
+    c.fillEllipse(in: CGRect(x: 128, y: 139, width: 28, height: 28))
 }
 
 func drawIcon(_ c: CGContext) {
@@ -62,12 +62,12 @@ for size in [16, 32, 128, 256, 512] {
 
 func writeLogo(_ name: String, line: CGColor, nodes: CGColor) {
     let url = folder.deletingLastPathComponent().appendingPathComponent(name + ".pdf")
-    var box = CGRect(x: 0, y: 0, width: 154, height: 165)
+    var box = CGRect(x: 0, y: 0, width: 154, height: 185)
     let context = CGContext(url as CFURL, mediaBox: &box, nil)!
     context.beginPDFPage(nil)
     context.translateBy(x: 0, y: box.height)
     context.scaleBy(x: 1, y: -1)
-    context.translateBy(x: -49, y: -46)
+    context.translateBy(x: -49, y: -32)
     drawMark(context, line: line, nodes: nodes)
     context.endPDFPage(); context.closePDF()
 }

@@ -11,7 +11,11 @@ enum BrandAssets {
             .flatMap { NSImage(contentsOf: $0) }
             ?? NSImage(systemSymbolName: "point.3.connected.trianglepath.dotted", accessibilityDescription: "Backtrace")
             ?? NSImage(size: size)
-        image.size = size
+        // Fit the taller spiral without stretching it or clipping its endpoints.
+        if image.size.width > 0, image.size.height > 0 {
+            let scale = min(size.width / image.size.width, size.height / image.size.height)
+            image.size = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+        }
         image.isTemplate = template
         return image
     }

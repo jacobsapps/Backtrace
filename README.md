@@ -1,6 +1,6 @@
 # Backtrace
 
-<img src="Resources/AppIcon.png" width="96" alt="Breadcrumb: a winding ivory trail with gold endpoints, on terracotta">
+<img src="Resources/AppIcon.png" width="96" alt="Breadcrumb: an open spiral b with gold endpoints and a red dot, on terracotta">
 
 A native, local Mac library for finding and reopening Codex and Claude Code
 conversations. Full-text search includes saved user **and assistant messages**,
@@ -240,7 +240,8 @@ This is an ad-hoc-signed personal prototype, not a notarized distribution.
 
 ## App icon
 
-The **Breadcrumb** mark (concept 06): a winding trail with two gold endpoints.
+The **Breadcrumb** mark: one open spiral shaped like a lowercase **b**, with two
+gold endpoints and a red dot near the lower-right edge. The tube never joins itself.
 The app icon, in-app header, and menu-bar logo share the same geometry.
 All three are drawn locally from `scripts/render-icon.swift`; no
 external fonts, image services, or rendering dependencies are needed. To regenerate
