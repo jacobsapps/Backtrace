@@ -16,6 +16,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # must not depend on iconutil's graphical services being available on the host.
 # scripts/render-icon.swift remains the source for intentional icon regeneration.
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cp Resources/BrandMark.pdf Resources/MenuBarMark.pdf "$APP/Contents/Resources/"
 cp "$BIN" "$APP/Contents/MacOS/Backtrace"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/semantic_search.py "$APP/Contents/Resources/"
@@ -23,6 +24,8 @@ cp Resources/index_sessions.py Resources/history_cache.py "$APP/Contents/Resourc
 rm -rf "$APP/Contents/Resources/__pycache__"
 codesign --force --sign - --entitlements Resources/Backtrace.entitlements "$APP"
 codesign --verify --deep --strict "$APP"
+# Preserve a fresh bundle timestamp through ditto so macOS notices icon updates.
+touch "$APP"
 if [[ "${1:-}" == --install ]]; then
     DEST="/Applications/Backtrace.app"
     LEGACY="/Applications/Backtrack.app"

@@ -44,9 +44,9 @@ struct ContentView: View {
 
     private var header: some View {
         HStack(spacing: 11) {
-            Image(systemName: "books.vertical")
-                .font(.system(size: 25, weight: .light))
-                .foregroundStyle(Notebook.accent).accessibilityHidden(true)
+            Image(nsImage: BrandAssets.logo)
+                .resizable().scaledToFit().frame(width: 29, height: 31)
+                .accessibilityHidden(true)
             Text("Backtrace").font(.system(size: 28, weight: .regular, design: .serif)).tracking(-0.8)
             Spacer()
             Menu {

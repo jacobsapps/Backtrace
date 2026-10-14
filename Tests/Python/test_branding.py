@@ -45,3 +45,16 @@ class BrandingTests(unittest.TestCase):
         png = (ROOT / 'Resources/AppIcon.png').read_bytes()
         self.assertEqual(png[:8], b'\x89PNG\r\n\x1a\n')
         self.assertEqual(struct.unpack('>II', png[16:24]), (1024, 1024))
+
+    def test_header_and_menu_bar_vector_logos_are_shipped(self):
+        script = (ROOT / 'scripts/build-app.sh').read_text()
+        for name in ('BrandMark', 'MenuBarMark'):
+            asset = ROOT / f'Resources/{name}.pdf'
+            self.assertTrue(asset.read_bytes().startswith(b'%PDF-'))
+            self.assertIn(f'Resources/{name}.pdf', script)
+        header = (ROOT / 'Sources/Backtrace/ContentView.swift').read_text()
+        app = (ROOT / 'Sources/Backtrace/App.swift').read_text()
+        self.assertIn('BrandAssets.logo', header)
+        self.assertIn('BrandAssets.menuBar', app)
+        self.assertNotIn('books.vertical', header)
+        self.assertNotIn('clock.arrow.circlepath', app)

@@ -41,11 +41,13 @@ import SwiftUI
                 Button("Copy Resume Command") { store.copyCommand() }.keyboardShortcut("c", modifiers: [.command, .shift])
             }
         }
-        MenuBarExtra("Backtrace", systemImage: "clock.arrow.circlepath") {
+        MenuBarExtra {
             Button("Find a session…    ⌃⌥Space") { openWindow(id: "main"); delegate.show() }
             Button("Refresh Index") { Task { await store.refresh() } }
             Divider()
             Button("Quit Backtrace") { NSApp.terminate(nil) }.keyboardShortcut("q")
+        } label: {
+            Image(nsImage: BrandAssets.menuBar).accessibilityLabel("Backtrace")
         }
     }
 }

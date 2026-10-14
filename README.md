@@ -1,6 +1,6 @@
 # Backtrace
 
-<img src="Resources/AppIcon.png" width="96" alt="An ivory open book with a returning bookmark, on forest green">
+<img src="Resources/AppIcon.png" width="96" alt="Breadcrumb: a winding ivory trail with gold endpoints, on terracotta">
 
 A native, local Mac library for finding and reopening Codex and Claude Code
 conversations. Full-text search includes saved user **and assistant messages**,
@@ -240,13 +240,16 @@ This is an ad-hoc-signed personal prototype, not a notarized distribution.
 
 ## App icon
 
-An open book with a bookmark that doubles back: return to your place.
-The icon is drawn locally from vector paths in `scripts/render-icon.swift`; no
+The **Breadcrumb** mark (concept 06): a winding trail with two gold endpoints.
+The app icon, in-app header, and menu-bar logo share the same geometry.
+All three are drawn locally from `scripts/render-icon.swift`; no
 external fonts, image services, or rendering dependencies are needed. To regenerate
-the checked-in PNG and ICNS (including exact-size 16/32 px and Retina variants):
+the checked-in PNG, ICNS (including exact-size 16/32 px and Retina variants),
+and transparent vector PDF logos:
 
 ```sh
 swift scripts/render-icon.swift .local/Backtrace.iconset
 iconutil -c icns .local/Backtrace.iconset -o Resources/AppIcon.icns
 cp .local/Backtrace.iconset/icon_512x512@2x.png Resources/AppIcon.png
+cp .local/BrandMark.pdf .local/MenuBarMark.pdf Resources/
 ```
