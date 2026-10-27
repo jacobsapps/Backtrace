@@ -3,8 +3,12 @@ import BacktraceCore
 import SwiftUI
 
 @MainActor final class Store: ObservableObject {
+    typealias SemanticRunner = @Sendable (String, [Session], String, Bool, String) async throws -> [SearchHit]
+    static let favouritesKey = "favouriteSessionIDs"
     @Published var sessions: [Session] = []
     @Published var hits: [SearchHit] = []
+    @Published private(set) var favouriteIDs: Set<String>
+    @Published var favouritesOnly = false { didSet { if favouritesOnly != oldValue { search() } } }
     @Published var query = "" { didSet { if query != oldValue { search() } } }
     @Published var provider = "all" { didSet { if provider != oldValue { search() } } }
     @Published var related = true {
@@ -27,7 +31,8 @@ import SwiftUI
     @Published var semanticIndexing = false
     @Published var semanticSearching = false
     @Published var semanticNotice = ""
-    private let semanticEngine = SemanticSearch()
+    private let semanticSearch: SemanticRunner
+    private let favouritesDefaults: UserDefaults?
     private var semanticTask: Task<Void, Never>?
     private var lexicalTask: Task<([SearchHit], String?), Never>?
     private var snippetTask: Task<Void, Never>?
@@ -48,11 +53,20 @@ import SwiftUI
 
     init(preview: Bool = false, refreshOnStart: Bool = true, cache: URL? = nil,
          searchPath: String = LocalSearch.defaultPath,
+         favouritesDefaults: UserDefaults? = .standard, semanticSearch: SemanticRunner? = nil,
          refreshRunner: @escaping @Sendable () async throws -> Data = { try await Store.helper([]) }) {
         self.cache = cache ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Backtrack/sessions.json")
         self.searchPath = searchPath
         self.refreshRunner = refreshRunner
         self.preview = preview
+        // Provider-prefixed native IDs survive title/folder changes and index rebuilds.
+        // Previews never read or write the user's real favourites.
+        self.favouritesDefaults = preview ? nil : favouritesDefaults
+        favouriteIDs = Set(self.favouritesDefaults?.stringArray(forKey: Self.favouritesKey) ?? [])
+        let semanticEngine = SemanticSearch()
+        self.semanticSearch = semanticSearch ?? { query, sessions, provider, recent, path in
+            try await semanticEngine.search(query, sessions: sessions, provider: provider, recentFirst: recent, path: path)
+        }
         if preview {
             let now = Date().timeIntervalSince1970
             sessions = [
@@ -78,6 +92,13 @@ import SwiftUI
             await refresh()
         }
     }
+    func isFavourite(_ id: String) -> Bool { favouriteIDs.contains(id) }
+    func toggleFavourite(_ id: String) {
+        if !favouriteIDs.insert(id).inserted { favouriteIDs.remove(id) }
+        favouritesDefaults?.set(favouriteIDs.sorted(), forKey: Self.favouritesKey)
+        // Starring in All is just a preference write, not a new search/index pass.
+        if favouritesOnly { search() }
+    }
     func snapshot(_ sessions: [Session], query: String) {
         self.sessions = sessions
         engine = SearchEngine(sessions)
@@ -85,7 +106,8 @@ import SwiftUI
         snapshotFrozen = true
         searchTask?.cancel()
         searching = false
-        hits = (try? LocalSearch.search(query, sessions: sessions, path: searchPath)) ?? []
+        let scopedSessions = favouritesOnly ? sessions.filter { favouriteIDs.contains($0.id) } : sessions
+        hits = (try? LocalSearch.search(query, sessions: scopedSessions, path: searchPath)) ?? []
         selected = hits.first(where: { $0.session.title.contains("Free Parking UI") })?.id ?? hits.first?.id
     }
     func loadCache() async {
@@ -107,11 +129,24 @@ import SwiftUI
         semanticSearching = false
         generation += 1
         let version = generation
-        let engine = engine, sessions = sessions, query = query, provider = provider, related = related, recent = recentFirst, preview = preview, path = searchPath
+        let favouritesOnly = favouritesOnly, favouriteIDs = favouriteIDs
+        let engine = engine, query = query, provider = provider, related = related, recent = recentFirst, preview = preview, path = searchPath
+        let sessions = favouritesOnly || provider != "all" ? self.sessions.filter {
+            (!favouritesOnly || favouriteIDs.contains($0.id)) && (provider == "all" || $0.provider == provider)
+        } : self.sessions
         searchTask?.cancel()
         lexicalTask?.cancel()
         snippetTask?.cancel(); snippetWorker?.cancel(); snippetTask = nil
         pendingSnippets.removeAll(); requestedSnippets.removeAll()
+        // Never flash non-favourites while a tab change or unstar is settling.
+        if favouritesOnly {
+            hits.removeAll { !favouriteIDs.contains($0.id) }
+            if !visible.contains(where: { $0.id == selected }) { selected = hits.first?.id }
+        }
+        guard !sessions.isEmpty else {
+            hits = []; selected = nil; searching = false; searchMS = 0
+            return
+        }
         searchTask = Task {
             do { try await Task.sleep(for: .milliseconds(35)) } catch { return }
             guard !Task.isCancelled else { return }
@@ -119,6 +154,7 @@ import SwiftUI
             let worker = Task.detached(priority: .userInitiated) { () -> ([SearchHit], String?) in
                 if preview {
                     var hits = engine.search(query, provider: provider, related: false, recentFirst: recent)
+                        .filter { !favouritesOnly || favouriteIDs.contains($0.id) }
                     for i in hits.indices {
                         hits[i].snippet = hits[i].session.latest.replacingOccurrences(of: "Backtrace", with: "⟦Backtrace⟧")
                         hits[i].matchSource = "Assistant reply"
@@ -148,7 +184,7 @@ import SwiftUI
                 try await Task.sleep(for: .milliseconds(140))
                 guard version == generation, !Task.isCancelled else { return }
                 semanticSearching = true
-                let semantic = try await semanticEngine.search(query, sessions: sessions, provider: provider, recentFirst: recent, path: path)
+                let semantic = try await semanticSearch(query, sessions, provider, recent, path)
                 guard version == generation, !Task.isCancelled else { return }
                 semanticNotice = ""
                 // Exact/prefix results retain their excerpts. Meaning-only hits are labelled.

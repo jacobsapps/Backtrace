@@ -91,6 +91,12 @@ enum Diagnostics {
         let store = Store(preview: true, searchPath: databasePath)
         let host = NSHostingView(rootView: ContentView(store: store))
         let compact = args.contains("--compact")
+        if args.contains("--starred-preview") || args.contains("--favourites-preview") {
+            store.toggleFavourite("1"); store.toggleFavourite("2")
+        }
+        if args.contains("--favourites-preview") || args.contains("--favourites-empty-preview") {
+            store.favouritesOnly = true
+        }
         if args.contains("--search-preview") { store.query = "backtrace" }
         if args.contains("--empty-preview") { store.query = "nothing-matches-this" }
         if args.contains("--live-data") {

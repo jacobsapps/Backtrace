@@ -12,7 +12,7 @@ private actor RefreshCounter {
     }
 }
 final class StoreTests: XCTestCase {
-    func fixture() throws -> (URL, String, SessionIndex) {
+    func fixture(count: Int = 32) throws -> (URL, String, SessionIndex) {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         addTeardownBlock { try FileManager.default.removeItem(at: folder) }
@@ -23,7 +23,7 @@ final class StoreTests: XCTestCase {
         try db.execute("CREATE VIRTUAL TABLE vocabulary USING fts5vocab(search,'row')")
         try db.execute("CREATE TABLE files(id TEXT)")
         try db.execute("CREATE TABLE passages(id INTEGER,embedding BLOB,model TEXT)")
-        let sessions = (0..<32).map { Session(id: String($0), title: "Session \($0)", updated: 100) }
+        let sessions = (0..<count).map { Session(id: String($0), title: "Session \($0)", updated: 100) }
         for session in sessions {
             try db.execute("INSERT INTO files VALUES(?)", [session.id])
             try db.execute("INSERT INTO search VALUES(?,?,?,?,?,?)", [session.id,session.title,"/tmp","","","We named it Backtrace."])
@@ -41,7 +41,7 @@ final class StoreTests: XCTestCase {
     @MainActor func testNoChangeRefreshDoesNotPublishNewResultsAndCoalescesRequests() async throws {
         let (cache,path,_) = try fixture()
         let counter = RefreshCounter()
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, refreshRunner: { try await counter.refresh() })
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil, refreshRunner: { try await counter.refresh() })
         store.related = false
         await store.loadCache()
         try await settled(store)
@@ -63,7 +63,7 @@ final class StoreTests: XCTestCase {
         var replacement = old
         replacement.sessions[0].title = "Changed title"
         let replacementData = try JSONEncoder().encode(replacement)
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, refreshRunner: {
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil, refreshRunner: {
             try replacementData.write(to: cache, options: .atomic)
             return Data(#"{"changed":true,"warnings":[]}"#.utf8)
         })
@@ -76,7 +76,7 @@ final class StoreTests: XCTestCase {
     }
     @MainActor func testRapidReplacementAndLazyExcerptsUseLatestGeneration() async throws {
         let (cache,path,_) = try fixture()
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path)
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil)
         store.related = false
         await store.loadCache()
         store.query = "backtrace"

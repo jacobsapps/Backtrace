@@ -59,6 +59,10 @@ installation still requires write access to `/Applications`.
 - **Control–Option–Space** summons Backtrace; **⌘L** focuses search.
 - **↑/↓** selects a conversation; **Return** or a click reopens it in a new tab.
 - The main window stays compact: search, tab titles, folders, dates, and matching excerpts.
+- Star a session, or choose **Add to Favourites** from its three-dot/right-click menu.
+  The **Favourites** tab searches only starred sessions, including transcript and
+  semantic matches. Stars persist locally across relaunches and index rebuilds;
+  they do not change your terminal sessions or transcripts. Unstar to remove one.
 - Results show short highlighted excerpts. Meaning-only matches have a sparkle indicator
   (with an explicit tooltip) and do not fake keyword highlights; full match details are in ⋯.
 - Provider filters, meaning search, ranking, refresh, and index status live in ⋯, not a toolbar.
@@ -216,6 +220,9 @@ Close Backtrace before deleting `sessions.json`, `search.sqlite*`, and
 `models` intact to avoid reinstalling. Default `~/.codex` and `~/.claude` stores
 are supported, not custom agent homes.
 
+Favourites are stored separately in macOS preferences (`com.jacobsapps.Backtrack`,
+key `favouriteSessionIDs`), so rebuilding the search cache does not remove them.
+
 ## Verification
 
 ```sh
@@ -233,7 +240,9 @@ Evidence is kept locally in ignored `.local/`. Tests cover native identity,
 source immutability, transcript-only matches, incremental appends/rewrites,
 deleted conversations, quoted input, highlighted snippets, provider filters,
 recency, metadata-only fallback, quiescent WAL caches, lazy excerpts, terminal
-scripting, semantic paraphrases, and embedding replacement/deletion.
+scripting, semantic paraphrases, and embedding replacement/deletion. Favourites
+tests cover persistence, provider filters, transcript snippets, semantic scoping,
+and ignoring obsolete results after switching tabs or removing a favourite.
 The semantic integration test requires the optional installed model.
 
 This is an ad-hoc-signed personal prototype, not a notarized distribution.

@@ -20,7 +20,8 @@ struct ContentView: View {
         VStack(spacing: 0) {
             header
             searchBar
-            results.padding(.top, 18).padding(.bottom, 18)
+            libraryTabs
+            results.padding(.top, 8).padding(.bottom, 18)
         }
         .background {
             Notebook.paper
@@ -105,13 +106,51 @@ struct ContentView: View {
         .padding(.horizontal, 28)
     }
 
+    private var libraryTabs: some View {
+        HStack(spacing: 22) {
+            libraryTab("All", favourites: false)
+            libraryTab("Favourites", favourites: true)
+            Spacer()
+        }
+        .padding(.horizontal, 34).padding(.top, 10)
+    }
+
+    private func libraryTab(_ title: String, favourites: Bool) -> some View {
+        let selected = store.favouritesOnly == favourites
+        return Button { store.favouritesOnly = favourites } label: {
+            Text(title).font(.system(size: 13, weight: selected ? .semibold : .regular))
+                .foregroundStyle(selected ? Notebook.ink : Notebook.muted)
+                .padding(.vertical, 8)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(selected ? Notebook.accent : .clear).frame(height: 2)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier(favourites ? "favourites-tab" : "all-tab")
+    }
+
+    private var emptyTitle: String {
+        if store.refreshing && store.sessions.isEmpty { return "Gathering your sessions…" }
+        if store.favouritesOnly { return store.favouriteIDs.isEmpty ? "No favourites yet." : "No matching favourites." }
+        return "Nothing here just yet."
+    }
+
+    private var emptyHint: String {
+        if store.favouritesOnly {
+            return store.favouriteIDs.isEmpty ? "Star a session to keep it here." : "Try another search or session filter."
+        }
+        return store.sessions.isEmpty ? "Your saved conversations will appear here." : "Try another word or folder."
+    }
+
     private var results: some View {
         Group {
             if store.hits.isEmpty {
                 VStack(spacing: 9) {
-                    Text(store.refreshing && store.sessions.isEmpty ? "Gathering your sessions…" : "Nothing here just yet.")
+                    Text(emptyTitle)
                         .font(.system(size: 18, design: .serif))
-                    Text(store.sessions.isEmpty ? "Your saved conversations will appear here." : "Try another word or folder.")
+                    Text(emptyHint)
                         .font(.system(size: 12)).foregroundStyle(Notebook.muted)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -139,6 +178,7 @@ struct ContentView: View {
     private func row(_ hit: SearchHit) -> some View {
         let s = hit.session
         let selected = store.selected == s.id
+        let favourite = store.isFavourite(s.id)
         return HStack(spacing: 6) {
             Button {
                 store.selected = s.id
@@ -180,9 +220,20 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(store.opening || store.searching || !s.available)
-            .help("\(s.provider.capitalized) · \(s.cwd)\(hit.semantic ? " · Similar meaning" : "")\n\(hit.matchSource)\nClick to reopen in a new terminal tab.")
+            .help("\(s.provider.capitalized)\n\(s.cwd)\(hit.semantic ? "\nSimilar meaning" : "")\n\(hit.matchSource)\nClick to reopen in a new terminal tab.")
             .accessibilityLabel("\(s.title), \(s.provider), \(s.cwd)")
             .accessibilityHint(s.available ? "Reopen session" : "Original folder is missing")
+            Button { store.toggleFavourite(s.id) } label: {
+                Image(systemName: favourite ? "star.fill" : "star")
+                    .font(.system(size: 12))
+                    .foregroundStyle(favourite ? Notebook.accent : Notebook.muted.opacity(0.6))
+                    .frame(width: 24, height: 28).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(favourite ? "Remove from Favourites" : "Add to Favourites")
+            .accessibilityLabel("\(favourite ? "Remove from" : "Add to") Favourites: \(s.title)")
+            .accessibilityValue(favourite ? "Favourite" : "Not a favourite")
+            .accessibilityIdentifier("favourite-\(s.id)")
             Menu {
                 actions(s)
             } label: {
@@ -192,6 +243,7 @@ struct ContentView: View {
             .foregroundStyle(Notebook.muted)
             .opacity(selected || hovered == s.id ? 1 : 0)
             .accessibilityLabel("Options for \(s.title)")
+            .accessibilityIdentifier("session-options-\(s.id)")
         }
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(selected ? Notebook.selection.opacity(0.65) : hovered == s.id ? Notebook.selection.opacity(0.25) : .clear,
@@ -201,6 +253,11 @@ struct ContentView: View {
     }
 
     @ViewBuilder private func actions(_ s: Session) -> some View {
+        Button { store.toggleFavourite(s.id) } label: {
+            Label(store.isFavourite(s.id) ? "Remove from Favourites" : "Add to Favourites",
+                  systemImage: store.isFavourite(s.id) ? "star.slash" : "star")
+        }
+        Divider()
         Button("About this session…") { detail = s }
         Button("Copy resume command") { store.selected = s.id; store.copyCommand() }
         Button("Show folder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: s.cwd) }
