@@ -33,13 +33,13 @@ extension StoreTests {
         let preferences = isolatedPreferences()
         let codex = "codex:00000000-0000-0000-0000-000000000001"
         let claude = "claude:00000000-0000-0000-0000-000000000001"
-        let first = Store(refreshOnStart: false, favouritesDefaults: preferences)
+        let first = Store(refreshOnStart: false, preferences: preferences)
         first.toggleFavourite(codex)
-        let second = Store(refreshOnStart: false, favouritesDefaults: preferences)
+        let second = Store(refreshOnStart: false, preferences: preferences)
         XCTAssertTrue(second.isFavourite(codex))
         XCTAssertFalse(second.isFavourite(claude))
         second.toggleFavourite(codex)
-        let third = Store(refreshOnStart: false, favouritesDefaults: preferences)
+        let third = Store(refreshOnStart: false, preferences: preferences)
         XCTAssertTrue(third.favouriteIDs.isEmpty)
         XCTAssertEqual(preferences.stringArray(forKey: Store.favouritesKey), [])
     }
@@ -47,7 +47,7 @@ extension StoreTests {
     @MainActor func testPreviewFavouritesNeverReadOrWriteRealPreferences() {
         let preferences = isolatedPreferences()
         preferences.set(["codex:real-session"], forKey: Store.favouritesKey)
-        let preview = Store(preview: true, favouritesDefaults: preferences)
+        let preview = Store(preview: true, preferences: preferences)
         XCTAssertTrue(preview.favouriteIDs.isEmpty)
         preview.toggleFavourite("1")
         XCTAssertTrue(preview.isFavourite("1"))
@@ -56,7 +56,7 @@ extension StoreTests {
 
     @MainActor func testStarringInAllDoesNotSearchOrReorderResults() async throws {
         let (cache,path,_) = try fixture()
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil)
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, preferences: nil)
         store.related = false
         await store.loadCache()
         try await settled(store)
@@ -75,7 +75,7 @@ extension StoreTests {
 
     @MainActor func testFavouritesFilterBeforeVisibleLimitAndKeepTranscriptSnippets() async throws {
         let (cache,path,_) = try fixture(count: 140)
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil)
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, preferences: nil)
         store.related = false
         await store.loadCache()
         store.query = "backtrace"
@@ -100,7 +100,7 @@ extension StoreTests {
         index.sessions[1].provider = "claude"
         index.sessions[1].available = false // Missing folders may still be bookmarked.
         try JSONEncoder().encode(index).write(to: cache)
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil)
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, preferences: nil)
         store.related = false
         await store.loadCache()
         store.toggleFavourite("0"); store.toggleFavourite("1")
@@ -126,7 +126,7 @@ extension StoreTests {
 
     @MainActor func testFavouritesSurviveRefreshTitleChangeAndTemporaryDisappearance() async throws {
         let (cache,path,original) = try fixture()
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: isolatedPreferences())
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, preferences: isolatedPreferences())
         store.related = false
         await store.loadCache()
         store.toggleFavourite("0")
@@ -152,7 +152,7 @@ extension StoreTests {
     @MainActor func testEmptyFavouritesDoNotInvokeSemanticSearch() async throws {
         let (cache,path,_) = try fixture()
         let probe = DelayedMeaningSearch()
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil,
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, preferences: nil,
                           semanticSearch: { _, sessions, _, _, _ in await probe.search(sessions) })
         await store.loadCache()
         store.favouritesOnly = true
@@ -167,7 +167,7 @@ extension StoreTests {
     @MainActor func testSemanticCandidatesAreScopedBeforeTheTopTwelveLimit() async throws {
         let (cache,path,_) = try fixture()
         let probe = DelayedMeaningSearch()
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil,
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, preferences: nil,
                           semanticSearch: { _, sessions, _, _, _ in await probe.search(sessions) })
         await store.loadCache()
         store.toggleFavourite("31")
@@ -182,7 +182,7 @@ extension StoreTests {
     @MainActor func testUnstarRejectsAnInFlightSemanticReply() async throws {
         let (cache,path,_) = try fixture()
         let probe = DelayedMeaningSearch()
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil,
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, preferences: nil,
                           semanticSearch: { _, sessions, _, _, _ in await probe.search(sessions) })
         await store.loadCache()
         store.toggleFavourite("0"); store.toggleFavourite("1")
@@ -198,7 +198,7 @@ extension StoreTests {
     @MainActor func testTabSwitchRejectsAnInFlightAllSessionsSemanticReply() async throws {
         let (cache,path,_) = try fixture()
         let probe = DelayedMeaningSearch()
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil,
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, preferences: nil,
                           semanticSearch: { _, sessions, _, _, _ in await probe.search(sessions) })
         await store.loadCache()
         store.toggleFavourite("31")

@@ -41,7 +41,7 @@ final class StoreTests: XCTestCase {
     @MainActor func testNoChangeRefreshDoesNotPublishNewResultsAndCoalescesRequests() async throws {
         let (cache,path,_) = try fixture()
         let counter = RefreshCounter()
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil, refreshRunner: { try await counter.refresh() })
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, preferences: nil, refreshRunner: { try await counter.refresh() })
         store.related = false
         await store.loadCache()
         try await settled(store)
@@ -63,7 +63,7 @@ final class StoreTests: XCTestCase {
         var replacement = old
         replacement.sessions[0].title = "Changed title"
         let replacementData = try JSONEncoder().encode(replacement)
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil, refreshRunner: {
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, preferences: nil, refreshRunner: {
             try replacementData.write(to: cache, options: .atomic)
             return Data(#"{"changed":true,"warnings":[]}"#.utf8)
         })
@@ -76,7 +76,7 @@ final class StoreTests: XCTestCase {
     }
     @MainActor func testRapidReplacementAndLazyExcerptsUseLatestGeneration() async throws {
         let (cache,path,_) = try fixture()
-        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, favouritesDefaults: nil)
+        let store = Store(refreshOnStart: false, cache: cache, searchPath: path, preferences: nil)
         store.related = false
         await store.loadCache()
         store.query = "backtrace"

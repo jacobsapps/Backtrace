@@ -22,7 +22,16 @@ public struct Session: Codable, Identifiable, Hashable, Sendable {
     }
     public var folder: String { URL(fileURLWithPath: cwd).lastPathComponent }
     public var command: String {
-        "cd -- \(Self.quote(cwd)) && \(provider == "claude" ? "claude --resume" : "codex resume") \(Self.quote(sessionID))"
+        resumeCommand()
+    }
+    public func resumeCommand(yolo: Bool = false) -> String {
+        let cli = provider == "claude" ? "claude --resume" : "codex resume"
+        let flag = provider == "claude" ? "--dangerously-skip-permissions" : "--dangerously-bypass-approvals-and-sandbox"
+        // Off deliberately preserves CLI-controlled behaviour, not a promise of
+        // restricted permissions. Never infer opt-in from the transcript.
+        // Keep Claude's optional --resume value adjacent to its flag; inserting
+        // a permission flag between them would open the picker instead.
+        return "cd -- \(Self.quote(cwd)) && \(cli) \(Self.quote(sessionID))\(yolo ? " " + flag : "")"
     }
     public static func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 }

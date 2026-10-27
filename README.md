@@ -76,6 +76,21 @@ has no equivalent safe native tab-creation command). Automation permission may
 be required. Backtrace never closes, retitles, or injects keystrokes into your
 working sessions. It does not deduplicate against currently running agent sessions.
 
+### Reopen permissions
+
+The main **⋯** menu has a persistent **Reopen in YOLO mode** toggle, off by default.
+Enabling it asks for confirmation, then adds these flags to future resume commands:
+
+- Codex: `--dangerously-bypass-approvals-and-sandbox` skips approvals and sandboxing.
+- Claude: `--dangerously-skip-permissions` bypasses permission checks.
+
+**Off leaves permissions to your CLI settings and its resume behaviour.** It is
+not a forced restricted mode: existing CLI configuration may already allow full
+access. Backtrace does not inspect or restore permission modes from transcripts,
+or modify your Codex/Claude configuration. Running tabs are unaffected. Copied
+resume commands use the same selected mode as opening a session. The preference
+is local to Backtrace and survives restarts; previews never read or write it.
+
 ## Search and ranking
 
 SQLite FTS5 indexes titles, paths, branches, IDs, prompt history, and all saved

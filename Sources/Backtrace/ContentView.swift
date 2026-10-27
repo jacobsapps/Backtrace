@@ -15,6 +15,7 @@ struct ContentView: View {
     @FocusState private var searchFocused: Bool
     @State private var hovered: String?
     @State private var detail: Session?
+    @State private var confirmYOLO = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -60,6 +61,16 @@ struct ContentView: View {
                 Toggle("Prioritize recent sessions", isOn: $store.recentFirst)
                 Toggle("Search phrases by meaning", isOn: $store.related)
                 Divider()
+                Toggle("Reopen in YOLO mode", isOn: Binding(
+                    get: { store.reopenInYOLOMode },
+                    set: { enabled in
+                        if enabled { confirmYOLO = true }
+                        else { store.reopenInYOLOMode = false }
+                    }
+                ))
+                .help("On skips approval checks and Codex’s sandbox. Off uses your CLI settings, which may already allow full access.")
+                .accessibilityIdentifier("yolo-toggle")
+                Divider()
                 Button("Refresh sessions") { Task { await store.refresh() } }
                     .disabled(store.refreshing)
                 if store.semanticIndexing {
@@ -73,8 +84,15 @@ struct ContentView: View {
             }
             .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
             .foregroundStyle(Notebook.muted)
-            .help("Search options").accessibilityLabel("Search options")
+            .help("Options").accessibilityLabel("Options")
+            .accessibilityIdentifier("library-options")
         }.padding(.horizontal, 34).padding(.top, 34).padding(.bottom, 24)
+        .alert("Enable YOLO mode?", isPresented: $confirmYOLO) {
+            Button("Cancel", role: .cancel) {}
+            Button("Enable YOLO") { store.reopenInYOLOMode = true }
+        } message: {
+            Text("Reopened sessions will skip approval checks. Codex also runs without its sandbox. Agents can change files and run commands without asking.\n\nThis applies to future opens and copied commands, not running tabs. When off, permissions are left to your CLI settings, which may already allow full access.")
+        }
     }
 
     private var searchBar: some View {

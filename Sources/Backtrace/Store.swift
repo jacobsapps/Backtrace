@@ -5,6 +5,14 @@ import SwiftUI
 @MainActor final class Store: ObservableObject {
     typealias SemanticRunner = @Sendable (String, [Session], String, Bool, String) async throws -> [SearchHit]
     static let favouritesKey = "favouriteSessionIDs"
+    static let yoloModeKey = "reopenInYOLOMode"
+    @Published var reopenInYOLOMode: Bool {
+        didSet {
+            if reopenInYOLOMode != oldValue {
+                preferences?.set(reopenInYOLOMode, forKey: Self.yoloModeKey)
+            }
+        }
+    }
     @Published var sessions: [Session] = []
     @Published var hits: [SearchHit] = []
     @Published private(set) var favouriteIDs: Set<String>
@@ -32,7 +40,7 @@ import SwiftUI
     @Published var semanticSearching = false
     @Published var semanticNotice = ""
     private let semanticSearch: SemanticRunner
-    private let favouritesDefaults: UserDefaults?
+    private let preferences: UserDefaults?
     private var semanticTask: Task<Void, Never>?
     private var lexicalTask: Task<([SearchHit], String?), Never>?
     private var snippetTask: Task<Void, Never>?
@@ -53,16 +61,17 @@ import SwiftUI
 
     init(preview: Bool = false, refreshOnStart: Bool = true, cache: URL? = nil,
          searchPath: String = LocalSearch.defaultPath,
-         favouritesDefaults: UserDefaults? = .standard, semanticSearch: SemanticRunner? = nil,
+         preferences: UserDefaults? = .standard, semanticSearch: SemanticRunner? = nil,
          refreshRunner: @escaping @Sendable () async throws -> Data = { try await Store.helper([]) }) {
         self.cache = cache ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Backtrack/sessions.json")
         self.searchPath = searchPath
         self.refreshRunner = refreshRunner
         self.preview = preview
         // Provider-prefixed native IDs survive title/folder changes and index rebuilds.
-        // Previews never read or write the user's real favourites.
-        self.favouritesDefaults = preview ? nil : favouritesDefaults
-        favouriteIDs = Set(self.favouritesDefaults?.stringArray(forKey: Self.favouritesKey) ?? [])
+        // Previews never read or write the user's real preferences.
+        self.preferences = preview ? nil : preferences
+        favouriteIDs = Set(self.preferences?.stringArray(forKey: Self.favouritesKey) ?? [])
+        reopenInYOLOMode = self.preferences?.bool(forKey: Self.yoloModeKey) ?? false
         let semanticEngine = SemanticSearch()
         self.semanticSearch = semanticSearch ?? { query, sessions, provider, recent, path in
             try await semanticEngine.search(query, sessions: sessions, provider: provider, recentFirst: recent, path: path)
@@ -95,7 +104,7 @@ import SwiftUI
     func isFavourite(_ id: String) -> Bool { favouriteIDs.contains(id) }
     func toggleFavourite(_ id: String) {
         if !favouriteIDs.insert(id).inserted { favouriteIDs.remove(id) }
-        favouritesDefaults?.set(favouriteIDs.sorted(), forKey: Self.favouritesKey)
+        preferences?.set(favouriteIDs.sorted(), forKey: Self.favouritesKey)
         // Starring in All is just a preference write, not a new search/index pass.
         if favouritesOnly { search() }
     }
@@ -288,19 +297,25 @@ import SwiftUI
         let index = list.firstIndex { $0.id == selected } ?? 0
         selected = list[max(0, min(list.count - 1, index + delta))].id
     }
-    func copyCommand() {
+    func resumeCommand(for session: Session) -> String {
+        session.resumeCommand(yolo: reopenInYOLOMode)
+    }
+    func copyCommand(to pasteboard: NSPasteboard = .general) {
         guard let current else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(current.command, forType: .string)
+        pasteboard.clearContents()
+        pasteboard.setString(resumeCommand(for: current), forType: .string)
     }
     func openSession() {
         guard let session = current, session.available, !opening, !searching else { return }
+        // Capture the chosen mode before async validation; a later toggle must
+        // not silently change an already requested launch's permissions.
+        let command = resumeCommand(for: session)
         opening = true
         Task {
             defer { opening = false }
             do {
                 _ = try await Self.helper(["--validate"], input: JSONEncoder().encode(session))
-                try await Self.launch(session)
+                try await Self.launch(resumeCommand: command)
             } catch { self.error = error.localizedDescription }
         }
     }
@@ -331,10 +346,10 @@ import SwiftUI
     nonisolated static func appleString(_ text: String) -> String {
         "\"" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\r", with: "\\r") + "\""
     }
-    nonisolated static func launch(_ session: Session) async throws {
+    nonisolated static func launch(resumeCommand: String) async throws {
         // Create a fresh tab with its command at process creation. Never write into
         // an existing session or use keystrokes (which could hit a running agent).
-        let command = "/bin/zsh -lic " + Session.quote(session.command + "; exec /bin/zsh -l")
+        let command = "/bin/zsh -lic " + Session.quote(resumeCommand + "; exec /bin/zsh -l")
         let hasITerm = await MainActor.run { NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.googlecode.iterm2") != nil }
         let script: String
         if hasITerm {
