@@ -147,10 +147,7 @@ public struct SearchEngine: Sendable {
             }
             guard matches else { continue }
             if !terms.isEmpty && doc.title.contains(normalized) { quality += 12 }
-            let days = max(0, now - doc.session.updated) / 86400
-            // Compress text-score differences so recency dominates broad searches.
-            // Equal-quality matches today rank up to ~17x above very old matches.
-            let recency = 0.06 + 0.94 * exp(-days / 21)
+            let recency = LocalSearch.recency(doc.session.updated, now: now)
             let score = terms.isEmpty ? doc.session.updated : (recentFirst ? sqrt(quality) * recency : quality)
             hits.append(SearchHit(session: doc.session, score: score, related: expanded))
         }

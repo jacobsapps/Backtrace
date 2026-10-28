@@ -69,12 +69,13 @@ final class LocalSearchTests: XCTestCase {
         let typo = try add("typo", text: "Someone typed backgroudn here.")
         XCTAssertEqual(Set(try search("backgroudn", [correct,typo]).map(\.id)), Set(["correct","typo"]))
     }
-    func testRecencyStronglyWeightsFullTextAndCanBeDisabled() throws {
+    func testRecencyIsABoundedTieBreakerAndCanBeDisabled() throws {
         let old = try add("old", text: "backtrace", days: 120)
         let new = try add("new", text: "backtrace")
         let hits = try search("backtrace", [old,new])
         XCTAssertEqual(hits.first?.id, "new")
-        XCTAssertGreaterThan(hits[0].score / hits[1].score, 30)
+        XCTAssertGreaterThan(hits[0].score / hits[1].score, 1)
+        XCTAssertLessThan(hits[0].score / hits[1].score, 1.14)
         let best = try search("backtrace", [old,new], recent: false)
         XCTAssertEqual(best[0].score, best[1].score, accuracy: 0.001)
     }

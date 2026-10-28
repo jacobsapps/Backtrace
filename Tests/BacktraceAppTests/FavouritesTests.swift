@@ -86,6 +86,8 @@ extension StoreTests {
         XCTAssertEqual(store.hits.map(\.id), ["99"])
         try await settled(store)
         XCTAssertEqual(store.visible.map(\.id), ["99"])
+        store.ensureSnippet(for: "99")
+        try await waitUntil { !store.hits[0].snippet.isEmpty }
         XCTAssertTrue(store.hits[0].snippet.contains("⟦Backtrace⟧"))
         XCTAssertEqual(store.query, "backtrace")
         store.favouritesOnly = false

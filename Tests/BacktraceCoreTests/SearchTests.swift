@@ -10,9 +10,9 @@ final class SearchTests: XCTestCase {
         let engine = SearchEngine([session("old", "Old", days: 50), session("new", "New")])
         XCTAssertEqual(engine.search("", now: now).map(\.id), ["new", "old"])
     }
-    func testStrongRecencyAndOptOut() {
+    func testRelevanceBeatsAgeInMetadataFallback() {
         let engine = SearchEngine([session("old", "Background processing", days: 90), session("new", "iOS investigation", text: "background processing")])
-        XCTAssertEqual(engine.search("background", now: now).first?.id, "new")
+        XCTAssertEqual(engine.search("background", now: now).first?.id, "old")
         XCTAssertEqual(engine.search("background", recentFirst: false, now: now).first?.id, "old")
     }
     func testOldUniqueMatchNeverSuppressed() {

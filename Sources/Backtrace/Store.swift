@@ -17,7 +17,7 @@ import SwiftUI
     @Published var hits: [SearchHit] = []
     @Published private(set) var favouriteIDs: Set<String>
     @Published var favouritesOnly = false { didSet { if favouritesOnly != oldValue { search() } } }
-    @Published var query = "" { didSet { if query != oldValue { search() } } }
+    @Published var query = "" { didSet { if query != oldValue { search(resetSelection: true) } } }
     @Published var provider = "all" { didSet { if provider != oldValue { search() } } }
     @Published var related = true {
         didSet {
@@ -132,7 +132,7 @@ import SwiftUI
             search()
         }
     }
-    func search() {
+    func search(resetSelection: Bool = false) {
         guard !snapshotFrozen else { return }
         searching = true
         semanticSearching = false
@@ -150,7 +150,7 @@ import SwiftUI
         // Never flash non-favourites while a tab change or unstar is settling.
         if favouritesOnly {
             hits.removeAll { !favouriteIDs.contains($0.id) }
-            if !visible.contains(where: { $0.id == selected }) { selected = hits.first?.id }
+            if resetSelection || !visible.contains(where: { $0.id == selected }) { selected = hits.first?.id }
         }
         guard !sessions.isEmpty else {
             hits = []; selected = nil; searching = false; searchMS = 0
@@ -171,7 +171,7 @@ import SwiftUI
                     return (hits, nil)
                 }
                 do {
-                    return (try LocalSearch.search(query, sessions: sessions, provider: provider, recentFirst: recent, path: path), nil)
+                    return (try LocalSearch.search(query, sessions: sessions, provider: provider, recentFirst: recent, path: path, snippetLimit: 0), nil)
                 } catch is CancellationError {
                     return ([], nil)
                 } catch {
@@ -186,8 +186,8 @@ import SwiftUI
             searchMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
             if let warning = result.1 { notice = warning }
             else if notice.hasPrefix("Transcript index is not ready") { notice = "" }
-            if !visible.contains(where: { $0.id == selected }) { selected = hits.first?.id }
-            guard related, !preview, hits.count < 20, SearchEngine.tokens(query).count >= 2 else { return }
+            if resetSelection || !visible.contains(where: { $0.id == selected }) { selected = hits.first?.id }
+            guard related, !preview, SearchEngine.tokens(query).count >= 2 else { return }
             do {
                 // Let typing settle before asking the model. Keyword results are already visible.
                 try await Task.sleep(for: .milliseconds(140))
@@ -197,9 +197,9 @@ import SwiftUI
                 guard version == generation, !Task.isCancelled else { return }
                 semanticNotice = ""
                 // Exact/prefix results retain their excerpts. Meaning-only hits are labelled.
-                let exactIDs = Set(hits.map(\.id))
-                hits = LocalSearch.sort(hits + semantic.filter { !exactIDs.contains($0.id) })
-                if selected == nil { selected = hits.first?.id }
+                let followedTopResult = selected == hits.first?.id
+                hits = LocalSearch.merging(lexical: hits, semantic: semantic)
+                if selected == nil || followedTopResult { selected = hits.first?.id }
             } catch is CancellationError { return }
             catch {
                 guard version == generation, !Task.isCancelled else { return }

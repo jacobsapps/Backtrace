@@ -3,6 +3,39 @@ import BacktraceCore
 import SwiftUI
 
 enum Diagnostics {
+    static func auditSearch() {
+        let args = CommandLine.arguments
+        guard let flag = args.firstIndex(of: "--audit-search"), flag + 1 < args.count else { exit(2) }
+        let queries = Array(args[(flag + 1)...])
+        Task {
+            do {
+                let index = try JSONDecoder().decode(SessionIndex.self, from: Data(contentsOf: indexPath))
+                let engine = SemanticSearch()
+                let coverage = LocalSearch.coverage(path: databasePath)
+                print("Conversations: \(coverage.conversations). Embedded passages: \(coverage.embedded)/\(coverage.passages).")
+                for query in queries {
+                    let start = CFAbsoluteTimeGetCurrent()
+                    let lexical = try LocalSearch.search(query, sessions: index.sessions, path: databasePath, snippetLimit: 0)
+                    let keywordMS = (CFAbsoluteTimeGetCurrent() - start) * 1000
+                    let semantic = try await engine.search(query, sessions: index.sessions, path: databasePath)
+                    let merged = LocalSearch.merging(lexical: lexical, semantic: semantic)
+                    func sample(_ hits: [SearchHit]) -> [[String: Any]] {
+                        hits.prefix(8).map { ["title": $0.session.title, "id": $0.id, "score": $0.score,
+                                             "semantic": $0.semantic, "snippet": String($0.snippet.prefix(160))] }
+                    }
+                    let record: [String: Any] = ["query": query, "keywordMS": keywordMS,
+                        "totalMS": (CFAbsoluteTimeGetCurrent() - start) * 1000,
+                        "keywordCount": lexical.count, "semanticCount": semantic.count,
+                        "lexical": sample(lexical), "semantic": sample(semantic), "merged": sample(merged),
+                        "rankedIDs": merged.map(\.id)]
+                    let data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys])
+                    print(String(decoding: data, as: UTF8.self))
+                }
+                exit(0)
+            } catch { fputs("\(error)\n", stderr); exit(1) }
+        }
+        RunLoop.main.run()
+    }
     static var fixture: URL? {
         let args = CommandLine.arguments
         guard let flag = args.firstIndex(of: "--fixture"), flag + 1 < args.count else { return nil }

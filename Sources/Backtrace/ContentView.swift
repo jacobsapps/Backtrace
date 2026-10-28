@@ -58,7 +58,7 @@ struct ContentView: View {
                     Text("Claude").tag("claude")
                 }
                 Divider()
-                Toggle("Prioritize recent sessions", isOn: $store.recentFirst)
+                Toggle("Prefer recent sessions when close", isOn: $store.recentFirst)
                 Toggle("Search phrases by meaning", isOn: $store.related)
                 Divider()
                 Toggle("Reopen in YOLO mode", isOn: Binding(
@@ -240,6 +240,7 @@ struct ContentView: View {
             .disabled(store.opening || store.searching || !s.available)
             .help("\(s.provider.capitalized)\n\(s.cwd)\(hit.semantic ? "\nSimilar meaning" : "")\n\(hit.matchSource)\nClick to reopen in a new terminal tab.")
             .accessibilityLabel("\(s.title), \(s.provider), \(s.cwd)")
+            .accessibilityIdentifier("session-\(s.id)")
             .accessibilityHint(s.available ? "Reopen session" : "Original folder is missing")
             Button { store.toggleFavourite(s.id) } label: {
                 Image(systemName: favourite ? "star.fill" : "star")

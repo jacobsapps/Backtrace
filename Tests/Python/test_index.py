@@ -128,6 +128,29 @@ class IndexTests(NativeFixture):
         self.assertEqual(json.loads((self.cache / 'sessions.json').read_text())['version'], 1)
 
 class TranscriptTests(NativeFixture):
+    def test_title_vectors_are_incremental_and_do_not_contaminate_transcript_columns(self):
+        self.append_message('assistant', 'actualtranscript')
+        self.run_index()
+        with sqlite3.connect(self.cache / 'search.sqlite') as db:
+            title_id = db.execute("SELECT id FROM passages WHERE role='title'").fetchone()[0]
+            db.execute("UPDATE passages SET embedding=x'1234',model='keep' WHERE role='assistant'")
+            title_vector = bytes(1536)
+            db.execute("UPDATE passages SET embedding=?,model='title-model' WHERE role='title'",(title_vector,))
+        self.run_index()
+        with sqlite3.connect(self.cache / 'search.sqlite') as db:
+            self.assertEqual(db.execute("SELECT id,embedding FROM passages WHERE role='title'").fetchone(),(title_id,title_vector))
+        with sqlite3.connect(self.db) as db:
+            db.execute("UPDATE threads SET name='Renamed article intent'")
+        self.run_index()
+        self.append_message('assistant', 'appendedtranscript')
+        self.run_index()  # Must not treat a title-vector row as a user/assistant message.
+        with sqlite3.connect(self.cache / 'search.sqlite') as db:
+            self.assertEqual(db.execute("SELECT text,embedding FROM passages WHERE role='title'").fetchall(),[('Renamed article intent',None)])
+            self.assertEqual(db.execute("SELECT embedding FROM passages WHERE role='assistant' ORDER BY id LIMIT 1").fetchone()[0],bytes.fromhex('1234'))
+            user, assistant = db.execute('SELECT user,assistant FROM search').fetchone()
+            self.assertNotIn('Renamed article intent',user + assistant)
+            self.assertIn('appendedtranscript',assistant)
+
     def db_search(self, query):
         with sqlite3.connect(self.cache / 'search.sqlite') as db:
             return db.execute('SELECT id FROM search WHERE search MATCH ?', (query,)).fetchall()
@@ -179,7 +202,7 @@ class TranscriptTests(NativeFixture):
             db.execute("UPDATE passages SET embedding=x'0000',model='test'")
         self.run_index()
         with sqlite3.connect(self.cache / 'search.sqlite') as db:
-            self.assertEqual(db.execute('SELECT count(embedding) FROM passages').fetchone()[0], 1)
+            self.assertEqual(db.execute('SELECT count(embedding) FROM passages').fetchone()[0], 2)
         self.path.unlink()
         self.run_index()
         self.assertFalse(self.db_search('backtrace'))
@@ -203,9 +226,9 @@ class TranscriptTests(NativeFixture):
         model = 'minilm-l6-v2-qint8-arm64-1110a243-mean-256-v1'
         key = 'embedded:' + model + ':1536'
         with sqlite3.connect(self.cache / 'search.sqlite') as db:
-            self.assertEqual(db.execute("SELECT value FROM search_stats WHERE key='passages'").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT value FROM search_stats WHERE key='passages'").fetchone()[0], 2)
             db.execute('UPDATE passages SET embedding=?,model=?', (bytes(1536),model))
-            self.assertEqual(db.execute('SELECT value FROM search_stats WHERE key=?',(key,)).fetchone()[0],1)
+            self.assertEqual(db.execute('SELECT value FROM search_stats WHERE key=?',(key,)).fetchone()[0],2)
             revision = db.execute('SELECT max(seq) FROM semantic_changes').fetchone()[0]
             db.execute('UPDATE passages SET embedding=?,model=?', (bytes(1536),model))
             self.assertEqual(db.execute('SELECT max(seq) FROM semantic_changes').fetchone()[0],revision)
@@ -227,9 +250,9 @@ class TranscriptTests(NativeFixture):
             db.commit()
             m.ensure_search_acceleration(db)
             self.assertEqual(db.execute('SELECT embedding FROM passages').fetchone()[0],bytes.fromhex('1234'))
-            self.assertEqual(db.execute("SELECT value FROM search_stats WHERE key='embedded:legacy:2'").fetchone()[0],1)
+            self.assertEqual(db.execute("SELECT value FROM search_stats WHERE key='embedded:legacy:2'").fetchone()[0],2)
             m.ensure_search_acceleration(db)
-            self.assertEqual(db.execute("SELECT value FROM search_stats WHERE key='passages'").fetchone()[0],1)
+            self.assertEqual(db.execute("SELECT value FROM search_stats WHERE key='passages'").fetchone()[0],2)
 
 class RefreshTests(NativeFixture):
     def test_unchanged_refresh_preserves_cache_files_and_skips_prompt_cleaning(self):

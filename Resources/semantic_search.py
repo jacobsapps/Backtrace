@@ -31,17 +31,38 @@ class Encoder:
         self.session = ort.InferenceSession(str(folder / 'model_qint8_arm64.onnx'), sess_options=options, providers=['CPUExecutionProvider'])
 
     def encode(self, texts):
-        np = self.np
         encoded = self.tokenizer.encode_batch(texts)
+        return self.encode_tokens(encoded)
+
+    def encode_tokens(self, encoded):
+        np = self.np
+        width = max(len(e.ids) for e in encoded)
+        def pad(values):
+            return values + [0] * (width - len(values))
         inputs = {
-            'input_ids': np.array([e.ids for e in encoded], dtype=np.int64),
-            'attention_mask': np.array([e.attention_mask for e in encoded], dtype=np.int64),
-            'token_type_ids': np.array([e.type_ids for e in encoded], dtype=np.int64),
+            'input_ids': np.array([pad(e.ids) for e in encoded], dtype=np.int64),
+            'attention_mask': np.array([pad(e.attention_mask) for e in encoded], dtype=np.int64),
+            'token_type_ids': np.array([pad(e.type_ids) for e in encoded], dtype=np.int64),
         }
         output = self.session.run(None, inputs)[0]
         mask = inputs['attention_mask'][..., None]
         vectors = (output * mask).sum(axis=1) / np.maximum(mask.sum(axis=1), 1)
         return (vectors / np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-9)).astype(np.float32)
+
+    def encode_query(self, text):
+        # A descriptive search may exceed MiniLM's 256-token window. Include
+        # every overflow window instead of silently discarding the query's end.
+        encoded = self.tokenizer.encode(text)
+        windows = [encoded] + encoded.overflowing
+        if len(windows) == 1:
+            return self.encode_tokens(windows)[0]
+        total = self.np.zeros(384, dtype=self.np.float32)
+        for offset in range(0, len(windows), 8):
+            batch = windows[offset:offset + 8]
+            vectors = self.encode_tokens(batch)
+            for window, vector in zip(batch, vectors):
+                total += vector * max(1, sum(window.attention_mask) - 2)
+        return total / max(float(self.np.linalg.norm(total)), 1e-9)
 
 
 def save_embeddings(db, rows, vectors):
@@ -110,7 +131,7 @@ def main():
         encoder = Encoder()
         for line in sys.stdin:
             request = json.loads(line)
-            print(json.dumps(encoder.encode([request['query']])[0].tolist(), separators=(',', ':')), flush=True)
+            print(json.dumps(encoder.encode_query(request['query']).tolist(), separators=(',', ':')), flush=True)
 
 if __name__ == '__main__':
     try:

@@ -99,29 +99,46 @@ and known harness boilerplate are excluded. Every query token must match;
 prefixes and an edit-distance fallback handle partial names and common typos.
 Search syntax characters are treated as text, not raw SQL/FTS instructions.
 
-The default **Recent & relevant** ranking combines text relevance with a 14-day
-exponential decay and a 0.03 floor: otherwise equal new transcript matches can
-rank roughly 33× above old ones. Old unique matches remain discoverable. **Best
-match** removes the age penalty. Empty search is strictly newest first.
+Search is relevance-first. BM25 differences are preserved, with extra weight for
+matching titles and original prompts rather than incidental mentions scattered
+through a long transcript. **Prefer recent sessions when close** adds a bounded
+recency preference: at most about 14%, not the previous 33× penalty for old sessions.
+Turn it off to remove age weighting. Empty search is still strictly newest first.
 
 Semantic retrieval uses real, normalized 384-dimensional MiniLM embeddings of
-overlapping conversation passages. Cosine similarity has a minimum threshold;
-up to 12 meaning-only results for multiword queries supplement sparse lexical
-results without replacing exact excerpts. Single names and IDs stay lexical to
-avoid spurious semantic neighbours. Semantic suggestions are fallible. Embeddings
+overlapping conversation passages and short session titles. Cosine similarity has
+a minimum threshold. Every multiword query can retrieve up to 40 semantic
+candidates, even when many keyword results exist. Matching a session's title helps
+corroborate its intent instead of rewarding huge, mixed-topic conversations for
+incidental similarity. Hybrid ranking can promote an existing keyword hit or a
+meaning-only result; duplicate hits retain their genuine highlighted excerpts.
+Single names and IDs stay lexical to avoid spurious semantic neighbours. Queries
+longer than MiniLM's 256-token window pool all query windows instead of silently
+discarding the ending (the worker accepts up to 16 KB per request).
+Semantic suggestions are fallible, especially for vague descriptions. Embeddings
 are built incrementally in the background, newest conversations first, with
 progress in the options menu and durable eight-passage batches. They use the same
-strong recency bias as full-text results.
+small, bounded recency preference as full-text results. Title vectors are added
+incrementally without rebuilding existing transcript embeddings.
 
 Search is debounced by 35 ms, runs off the main thread, and rejects obsolete query
-results. Lexical results render first, with excerpts prepared only for the first
-page and then on demand as you scroll. If fewer than 20 lexical results match,
-meaning search runs after another 140 ms of idle time and arrives separately. A
+results. Lexical results render before excerpt generation, with highlighted
+excerpts fetched asynchronously for visible results and then as you scroll.
+Meaning search runs after another 140 ms of idle time and arrives separately. A
 persistent local stdio worker caches recent query vectors. The in-memory passage
 matrix updates from a change journal, rather than reloading all embeddings, and
 index progress uses transactionally maintained counters instead of corpus scans.
 There is no listening server or network request. Initial indexing never blocks
 typing, and completed conversations are searchable during the backfill.
+
+To inspect local keyword, semantic, and combined rankings without opening an
+agent session (output may contain private session titles and excerpts):
+
+```sh
+dist/Backtrace.app/Contents/MacOS/Backtrace --audit-search \
+  "ios operating system architecture" \
+  "blog post about splitting the iOS app into separate modules"
+```
 
 ## Architecture
 

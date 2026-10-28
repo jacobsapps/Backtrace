@@ -7,6 +7,7 @@ import SwiftUI
     @StateObject private var store = Store()
     @Environment(\.openWindow) private var openWindow
     init() {
+        if CommandLine.arguments.contains("--audit-search") { Diagnostics.auditSearch(); exit(0) }
         if CommandLine.arguments.contains("--verify-search") { Diagnostics.verifySearch(); exit(0) }
         if CommandLine.arguments.contains("--semantic-benchmark") { Diagnostics.semanticBenchmark(); exit(0) }
         if CommandLine.arguments.contains("--index-semantics") { Diagnostics.embedIndex(); exit(0) }

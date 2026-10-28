@@ -73,8 +73,8 @@ public enum LocalSearch {
         return IndexCoverage(conversations: Int(sqlite3_column_int(s, 0)), passages: Int(sqlite3_column_int(s, 1)), embedded: Int(sqlite3_column_int(s, 2)))
     }
     public static func recency(_ updated: Double, now: Double) -> Double {
-        // Two-week decay, ~33x preference for equally relevant recent conversations.
-        0.03 + 0.97 * exp(-max(0, now - updated) / (14 * 86400))
+        // Date breaks close relevance ties; it must not bury the right old session.
+        0.88 + 0.12 * exp(-max(0, now - updated) / (30 * 86400))
     }
     static func expression(_ query: String, db: SearchDatabase, fuzzy: Bool = false) throws -> String {
         let terms = Array(Set(SearchEngine.tokens(SearchEngine.normalize(query)))).sorted()
@@ -82,7 +82,8 @@ public enum LocalSearch {
             var alternatives = ["\"\(term)\"" + (term.count >= 2 ? "*" : "")]
             if fuzzy && term.count >= 5 {
                 // Vocabulary is on disk. Restrict candidates before edit-distance work.
-                let s = try db.statement("SELECT term FROM vocabulary WHERE term GLOB ? AND length(term) BETWEEN CAST(? AS INTEGER) AND CAST(? AS INTEGER) ORDER BY doc DESC LIMIT 1500", [String(term.prefix(2)) + "*", String(term.count - 1), String(term.count + 1)])
+                let prefix = String(term.prefix(2))
+                let s = try db.statement("SELECT term FROM vocabulary WHERE term>=? AND term<? AND length(term) BETWEEN CAST(? AS INTEGER) AND CAST(? AS INTEGER) ORDER BY doc DESC LIMIT 1500", [prefix, prefix + "\u{10FFFF}", String(term.count - 1), String(term.count + 1)])
                 defer { sqlite3_finalize(s) }
                 while try db.step(s) {
                     let word = SearchDatabase.text(s, 0)
@@ -123,7 +124,7 @@ public enum LocalSearch {
         var hits: [String: SearchHit] = [:]
         if !pending.isEmpty {
             for var hit in SearchEngine(pending).search(query, provider: provider, related: false, recentFirst: false, now: now) {
-                hit.score = min(12, hit.score / 3) * (recentFirst ? recency(hit.session.updated, now: now) : 1)
+                hit.score = min(1.9, hit.score / 8) * (recentFirst ? recency(hit.session.updated, now: now) : 1)
                 hit.snippet = hit.session.latest
                 hit.matchSource = "Session details"
                 hits[hit.id] = hit
@@ -142,10 +143,16 @@ public enum LocalSearch {
             }
             if !rows.isEmpty { break }
         }
+        let bestRank = max(rows.map(\.2).max() ?? 0, Double.leastNonzeroMagnitude)
         for (_, session, rank) in rows {
             let title = SearchEngine.normalize(session.title)
             let titleMatch = terms.allSatisfy { title.contains($0) }
-            let base = titleMatch ? 12.0 : 3 + min(2, log1p(rank))
+            // Preserve BM25 differences instead of compressing almost every
+            // transcript to the same score. Original intent beats a passing
+            // mention in a long conversation or a later "find that session".
+            let first = SearchEngine.normalize(String(session.first.prefix(3000)))
+            let firstMatch = !first.isEmpty && terms.allSatisfy { first.contains($0) }
+            let base = rank / bestRank + (titleMatch ? 0.5 : 0) + (firstMatch ? 0.4 : 0)
             let score = base * (recentFirst ? recency(session.updated, now: now) : 1)
             let prior = hits[session.id]
             hits[session.id] = SearchHit(session: session, score: max(score, prior?.score ?? 0), related: false, matchSource: titleMatch ? "Title" : "Transcript")
@@ -203,9 +210,34 @@ public enum LocalSearch {
             return $0.id < $1.id
         }
     }
+    public static func merging(lexical: [SearchHit], semantic: [SearchHit]) -> [SearchHit] {
+        guard !semantic.isEmpty else { return lexical }
+        // BM25 is normalized within the keyword pass. Cosine remains absolute,
+        // with a conservative floor. Strong meaning can beat incidental words;
+        // original-title/intent matches still have a high keyword-only floor.
+        // A small keyword corroboration bonus helps, without letting two weak
+        // signals outrank the strongest semantic result simply by matching twice.
+        var combined: [String: SearchHit] = [:]
+        let lexicalScores = Dictionary(uniqueKeysWithValues: lexical.map { ($0.id, $0.score) })
+        for var hit in lexical {
+            hit.score *= 0.55
+            combined[hit.id] = hit
+        }
+        for var hit in semantic {
+            let meaningScore = hit.score + 0.10 * min(1, lexicalScores[hit.id] ?? 0)
+            if var existing = combined[hit.id] {
+                existing.score = max(existing.score, meaningScore)
+                combined[hit.id] = existing
+            } else {
+                hit.score = meaningScore
+                combined[hit.id] = hit
+            }
+        }
+        return sort(Array(combined.values))
+    }
     public static func preview(_ session: Session, path: String = defaultPath) throws -> [(String, String)] {
         let db = try SearchDatabase(path)
-        let s = try db.statement("SELECT role,text FROM passages WHERE session_id=? ORDER BY id DESC LIMIT 8", [session.id])
+        let s = try db.statement("SELECT role,text FROM passages WHERE session_id=? AND role!='title' ORDER BY id DESC LIMIT 8", [session.id])
         defer { sqlite3_finalize(s) }
         var rows: [(String, String)] = []
         while try db.step(s) { rows.append((SearchDatabase.text(s, 0), SearchDatabase.text(s, 1))) }
@@ -252,7 +284,7 @@ public enum SemanticIndexer {
 public actor SemanticSearch {
     private var worker: EmbeddingWorker?
     private var matrix: [Float] = []
-    private var rows: [(Int64, String)] = []
+    private var rows: [(Int64, String, Bool)] = []
     private var positions: [Int64: Int] = [:]
     private var loadedRevision: Int64 = -1
     private var loadedPath = ""
@@ -283,13 +315,24 @@ public actor SemanticSearch {
         vDSP_mmul(matrix, 1, q, 1, &similarities, 1, vDSP_Length(rows.count), 1, vDSP_Length(dimension))
         let sessions = Dictionary(uniqueKeysWithValues: sessions.filter { provider == "all" || $0.provider == provider }.map { ($0.id, $0) })
         var winners: [String: (Int64, Double)] = [:]
+        var titleScores: [String: Double] = [:]
         for i in rows.indices {
             if i % 1024 == 0 { try Task.checkCancellation() }
-            // Conservative floor: semantic suggestions must be meaningfully close.
-            guard similarities[i] >= 0.42, let session = sessions[rows[i].1] else { continue }
+            guard let session = sessions[rows[i].1] else { continue }
             let quality = Double(similarities[i])
-            let score = quality * 2.5 * (recentFirst ? LocalSearch.recency(session.updated, now: now) : 1)
+            if rows[i].2 { titleScores[session.id] = max(0, quality) }
+            // Conservative floor: semantic suggestions must be meaningfully close.
+            guard quality >= 0.42 else { continue }
+            let score = quality * (recentFirst ? LocalSearch.recency(session.updated, now: now) : 1)
             if score > (winners[session.id]?.1 ?? 0) { winners[session.id] = (rows[i].0, score) }
+        }
+        // A huge mixed-topic session gets many chances at a coincidental high
+        // passage score. Corroboration from its short title helps original
+        // article/intent sessions, without excluding subtopics in long chats.
+        for (id, titleQuality) in titleScores {
+            guard let winner = winners[id], let session = sessions[id] else { continue }
+            let titleScore = titleQuality * (recentFirst ? LocalSearch.recency(session.updated, now: now) : 1)
+            winners[id] = (winner.0, winner.1 * 0.8 + titleScore * 0.2)
         }
         var hits: [SearchHit] = []
         let ordered = winners.sorted {
@@ -297,12 +340,13 @@ public actor SemanticSearch {
             let lhs = sessions[$0.key]?.updated ?? 0, rhs = sessions[$1.key]?.updated ?? 0
             return lhs == rhs ? $0.key < $1.key : lhs > rhs
         }
-        for (id, winner) in ordered.prefix(12) {
+        for (id, winner) in ordered.prefix(40) {
             guard let session = sessions[id] else { continue }
             let s = try db.statement("SELECT role,text FROM passages WHERE id=?", [String(winner.0)])
             defer { sqlite3_finalize(s) }
             if try db.step(s) {
-                hits.append(SearchHit(session: session, score: winner.1, related: false, snippet: SearchDatabase.text(s, 1), matchSource: SearchDatabase.text(s, 0) == "user" ? "Your message" : "Assistant reply", semantic: true))
+                let role = SearchDatabase.text(s, 0)
+                hits.append(SearchHit(session: session, score: winner.1, related: false, snippet: SearchDatabase.text(s, 1), matchSource: role == "title" ? "Session title" : role == "user" ? "Your message" : "Assistant reply", semantic: true))
             }
         }
         return LocalSearch.sort(hits)
@@ -322,10 +366,10 @@ public actor SemanticSearch {
         if full {
             matrix.removeAll(keepingCapacity: true); rows.removeAll(keepingCapacity: true); positions.removeAll(keepingCapacity: true)
             matrix.reserveCapacity(LocalSearch.coverage(path: path).embedded * SemanticIndexer.dimension)
-            sql = "SELECT id,session_id,embedding,model FROM passages WHERE model=? AND length(embedding)=1536 ORDER BY id"
+            sql = "SELECT id,session_id,embedding,model,role FROM passages WHERE model=? AND length(embedding)=1536 ORDER BY id"
             values = [SemanticIndexer.modelID]
         } else {
-            sql = "SELECT c.passage_id,p.session_id,p.embedding,p.model FROM (SELECT DISTINCT passage_id FROM semantic_changes WHERE seq>CAST(? AS INTEGER)) c LEFT JOIN passages p ON p.id=c.passage_id"
+            sql = "SELECT c.passage_id,p.session_id,p.embedding,p.model,p.role FROM (SELECT DISTINCT passage_id FROM semantic_changes WHERE seq>CAST(? AS INTEGER)) c LEFT JOIN passages p ON p.id=c.passage_id"
             values = [String(loadedRevision)]
         }
         let s = try db.statement(sql, values)
@@ -341,10 +385,10 @@ public actor SemanticSearch {
                     if let existing = positions[id] { index = existing }
                     else {
                         index = rows.count; positions[id] = index
-                        rows.append((id, ""))
+                        rows.append((id, "", false))
                         matrix.append(contentsOf: repeatElement(0, count: SemanticIndexer.dimension))
                     }
-                    rows[index] = (id, SearchDatabase.text(s, 1))
+                    rows[index] = (id, SearchDatabase.text(s, 1), SearchDatabase.text(s, 4) == "title")
                     matrix.withUnsafeMutableBytes { buffer in
                         buffer.baseAddress!.advanced(by: index * SemanticIndexer.dimension * 4)
                             .copyMemory(from: bytes, byteCount: SemanticIndexer.dimension * 4)

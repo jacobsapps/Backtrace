@@ -389,6 +389,7 @@ def open_search_db(cache):
         CREATE INDEX IF NOT EXISTS newest_sessions ON session_recency(updated DESC);
         CREATE TABLE IF NOT EXISTS passages (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, digest TEXT NOT NULL, embedding BLOB, model TEXT, UNIQUE(session_id, role, digest));
         CREATE INDEX IF NOT EXISTS passages_session ON passages(session_id);
+        CREATE UNIQUE INDEX IF NOT EXISTS semantic_titles ON passages(session_id) WHERE role='title';
         CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(id UNINDEXED, title, location, context, user, assistant, tokenize='unicode61 remove_diacritics 2', prefix='2 3 4');
         CREATE VIRTUAL TABLE IF NOT EXISTS vocabulary USING fts5vocab(search, 'row');
     ''')
@@ -461,7 +462,7 @@ def index_transcripts(sessions, cache):
                                 db.execute('INSERT OR IGNORE INTO passages(session_id,role,text,digest) VALUES(?,?,?,?)', (s['id'], role, chunk, digest))
                         offset = f.tell()
                 content = {'user': [], 'assistant': []}
-                for role, text in db.execute('SELECT role,text FROM passages WHERE session_id=? ORDER BY id', (s['id'],)):
+                for role, text in db.execute("SELECT role,text FROM passages WHERE session_id=? AND role!='title' ORDER BY id", (s['id'],)):
                     content[role].append(text)
                 if row:
                     db.execute('DELETE FROM search WHERE rowid=?', (row[0],))
@@ -472,9 +473,27 @@ def index_transcripts(sessions, cache):
             except OSError:
                 db.rollback()
                 failed += 1
+        changed += index_session_titles(db, sessions)
         prune_semantic_changes(db)
         db.commit()
         return failed, changed
+
+
+def index_session_titles(db, sessions):
+    """Short intent vectors complement long transcript chunks. No corpus rebuild."""
+    import hashlib
+    existing = {sid: text for sid, text in db.execute("SELECT session_id,text FROM passages WHERE role='title'")}
+    changed = 0
+    for s in sessions:
+        title = s['title'].strip()
+        if existing.get(s['id']) == title:
+            continue
+        db.execute("DELETE FROM passages WHERE session_id=? AND role='title'", (s['id'],))
+        if title:
+            digest = hashlib.sha256(title.encode()).hexdigest()
+            db.execute('INSERT INTO passages(session_id,role,text,digest) VALUES(?,?,?,?)', (s['id'], 'title', title, digest))
+        changed += 1
+    return changed
 
 
 def prune_semantic_changes(db, retain=8192):
